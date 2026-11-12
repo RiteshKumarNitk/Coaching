@@ -1,4 +1,4 @@
-const API_BASE = (import.meta.env.VITE_API_URL || "").replace(/\/+$/, "");
+export const API_BASE = (import.meta.env.VITE_API_URL || "").replace(/\/+$/, "");
 
 export class ApiError extends Error {
   constructor(status, message, details) {
@@ -56,5 +56,7 @@ async function request(path, { method = "GET", body, signal } = {}) {
 export const api = {
   get: (path, options) => request(path, options),
   post: (path, body, options) => request(path, { ...options, method: "POST", body }),
-  patch: (path, body, options) => request(path, { ...options, method: "PATCH", body })
+  patch: (path, body, options) => request(path, { ...options, method: "PATCH", body }),
+  put: (path, body, options) => request(path, { ...options, method: "PUT", body }),
+  del: (path, options) => request(path, { ...options, method: "DELETE" })
 };

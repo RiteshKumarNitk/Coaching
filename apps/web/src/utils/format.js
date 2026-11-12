@@ -6,6 +6,25 @@ const currency = new Intl.NumberFormat("en-IN", {
 
 export const formatCurrency = (value) => currency.format(Number(value ?? 0));
 
+export const formatNumber = (value) => new Intl.NumberFormat("en-IN").format(Number(value ?? 0));
+
+/** ISO timestamp -> YYYY-MM-DDTHH:mm for <input type="datetime-local">. */
+export function dateTimeInput(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}T${hours}:${minutes}`;
+}
+
+/** Today as YYYY-MM-DD in the user's local timezone. */
+export function todayInput() {
+  return dateInput(new Date());
+}
+
 export function formatDate(value, options = { day: "numeric", month: "short", year: "numeric" }) {
   if (!value) return "—";
   const date = new Date(value);
@@ -58,6 +77,20 @@ export function relativeDay(value) {
   if (diffDays === -1) return "Yesterday";
   if (diffDays > 1 && diffDays < 7) return `In ${diffDays} days`;
   return formatDate(value, { day: "numeric", month: "short" });
+}
+
+export const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/** ISO timestamp / date -> YYYY-MM-DD for <input type="date">. */
+export function dateInput(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  // Local calendar date: toISOString() would shift date-only values back a day in
+  // positive UTC offsets (e.g. IST), so a 12 Nov admission showed up as 11 Nov.
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
 }
 
 export function initials(name = "") {

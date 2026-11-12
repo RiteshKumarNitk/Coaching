@@ -12,11 +12,19 @@ import { asyncHandler } from "./utils/AppError.js";
 import { createAuditService } from "./services/audit.service.js";
 import { createAuthService } from "./services/auth.service.js";
 import { createDashboardService } from "./services/dashboard.service.js";
+import { createStudentsService } from "./services/admin/students.service.js";
+import { createTeachersService } from "./services/admin/teachers.service.js";
+import { createAcademicsService } from "./services/admin/academics.service.js";
+import { createTeacherService } from "./services/teacher.service.js";
+import { createStudentService } from "./services/student.service.js";
 import { createAuthController } from "./controllers/auth.controller.js";
 import { createDashboardController, createProfileController } from "./controllers/dashboard.controller.js";
+import { createAdminController } from "./controllers/admin.controller.js";
+import { createTeacherController } from "./controllers/teacher.controller.js";
+import { createStudentController } from "./controllers/student.controller.js";
 import { createAuthRouter } from "./routes/auth.routes.js";
+import { createAdminRouter } from "./routes/admin.routes.js";
 import {
-  createAdminRouter,
   createProfileRouter,
   createStudentRouter,
   createTeacherRouter
@@ -27,11 +35,19 @@ export function createApp(db) {
   const audit = createAuditService(db);
   const auth = createAuthService(db, audit);
   const dashboards = createDashboardService(db);
+  const students = createStudentsService(db, audit);
+  const teachers = createTeachersService(db, audit);
+  const academics = createAcademicsService(db, audit);
+  const teacherWorkspace = createTeacherService(db, audit);
+  const studentWorkspace = createStudentService(db, audit);
 
   const authMiddleware = createAuthMiddleware({ auth });
   const authController = createAuthController({ auth });
   const dashboardController = createDashboardController({ dashboards });
   const profileController = createProfileController({ auth });
+  const adminController = createAdminController({ dashboards, students, teachers, academics });
+  const teacherController = createTeacherController({ teacher: teacherWorkspace });
+  const studentController = createStudentController({ student: studentWorkspace });
 
   const app = express();
   app.disable("x-powered-by");
@@ -61,9 +77,9 @@ export function createApp(db) {
   app.use("/api", apiLimiter);
   app.use("/api/auth", createAuthRouter({ authMiddleware, authController }));
   app.use("/api/me", createProfileRouter({ authMiddleware, profileController }));
-  app.use("/api/admin", createAdminRouter({ authMiddleware, dashboardController }));
-  app.use("/api/teacher", createTeacherRouter({ authMiddleware, dashboardController }));
-  app.use("/api/student", createStudentRouter({ authMiddleware, dashboardController }));
+  app.use("/api/admin", createAdminRouter({ authMiddleware, adminController }));
+  app.use("/api/teacher", createTeacherRouter({ authMiddleware, dashboardController, teacherController }));
+  app.use("/api/student", createStudentRouter({ authMiddleware, dashboardController, studentController }));
   app.use("/api", apiNotFound);
 
   // Serve the built single-page app when it exists (single-origin deployment).

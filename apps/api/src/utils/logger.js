@@ -5,6 +5,17 @@ const SENSITIVE = /password|token|authorization|cookie|secret|hash/i;
 
 function redact(key, value) {
   if (SENSITIVE.test(key)) return "[redacted]";
+  if (value instanceof Error) {
+    // Error properties are non-enumerable, so JSON.stringify would drop them.
+    return {
+      name: value.name,
+      message: value.message,
+      code: value.code,
+      detail: value.detail,
+      hint: value.hint,
+      stack: env.isProduction ? undefined : value.stack?.split("\n").slice(0, 4).join("\n")
+    };
+  }
   if (value && typeof value === "object" && !Array.isArray(value)) {
     return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, redact(k, v)]));
   }

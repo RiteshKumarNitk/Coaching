@@ -65,6 +65,8 @@ async function createPostgresDatabase(connectionString) {
         query: async (text, params = []) => normaliseResult(await client.query(text, params)),
         exec: async (text) => normaliseResult(await client.query(text))
       };
+      tx.one = async (text, params = []) => (await tx.query(text, params)).rows[0] ?? null;
+      tx.many = async (text, params = []) => (await tx.query(text, params)).rows;
       try {
         await client.query("BEGIN");
         const result = await fn(tx);
@@ -122,6 +124,8 @@ async function createPgliteDatabase(directory) {
         query: async (text, params = []) => normaliseResult(await pglite.query(text, params)),
         exec: async (text) => normaliseResult(await pglite.exec(text))
       };
+      tx.one = async (text, params = []) => (await tx.query(text, params)).rows[0] ?? null;
+      tx.many = async (text, params = []) => (await tx.query(text, params)).rows;
       await pglite.exec("BEGIN");
       try {
         const result = await fn(tx);

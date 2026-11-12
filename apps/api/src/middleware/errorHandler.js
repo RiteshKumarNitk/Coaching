@@ -11,7 +11,13 @@ export function errorHandler(error, req, res, _next) {
   let code = "internal_error";
   let details;
 
-  if (error instanceof AppError) {
+  if (error?.issues && Array.isArray(error.issues)) {
+    // Zod errors thrown outside the validate() middleware.
+    status = 400;
+    code = "validation_error";
+    message = error.issues[0]?.message ?? "Invalid input";
+    details = error.issues.map((issue) => ({ field: issue.path.join(".") || "body", message: issue.message }));
+  } else if (error instanceof AppError) {
     status = error.status;
     code = error.code;
     message = error.expose ? error.message : message;

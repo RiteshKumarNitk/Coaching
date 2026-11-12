@@ -145,9 +145,9 @@ is not sized for 1,000 concurrent exam takers.
 ## Roadmap
 
 - **Phase 1 (done):** foundation, schema, auth, RBAC, layouts, dashboards, PWA shell.
-- **Phase 2:** admin management — students, teachers, courses, subjects, batches, enrolment, CSV.
-- **Phase 3:** teacher workspace — lectures, materials, assignments, attendance marking.
-- **Phase 4:** student app — courses, lecture player, notes, attendance history, announcements.
+- **Phase 2 (done):** admin management — students, teachers, courses, subjects, batches, enrolment, CSV.
+- **Phase 3 (done):** teacher workspace — batches, lectures, materials, assignments, submission evaluation, attendance marking.
+- **Phase 4 (done):** student app — courses, lecture player with progress, notes, assignments + submissions, attendance history, announcements.
 - **Phase 5:** examinations — question bank, secure attempts, autosave, evaluation, results.
 - **Phase 6:** fees — structures, receipts, dues reports, performance reports.
 - **Phase 7:** hardening, load tests, deployment, Android install testing.

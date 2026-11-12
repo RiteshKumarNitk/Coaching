@@ -11,8 +11,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 process.env.NODE_ENV = "test";
-delete process.env.DATABASE_URL;
-delete process.env.APP_ORIGIN;
+// Empty (not deleted) so dotenv cannot inject the real database URL from .env.
+process.env.DATABASE_URL = "";
+process.env.APP_ORIGIN = "";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const migrationsDir = path.resolve(here, "../../../database/migrations");
@@ -79,7 +80,7 @@ async function request(pathname, { method = "GET", body, cookie, origin } = {}) 
 
 before(async () => {
   tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "coaching-test-"));
-  db = await createDatabase({ pgliteDir: tempDir, allowLocal: true });
+  db = await createDatabase({ connectionString: "", pgliteDir: tempDir, allowLocal: true });
   await applyMigrations(db);
 
   await createUser({ email: "admin@test.local", password: "AdminPass123", role: "admin", fullName: "Admin User" });
