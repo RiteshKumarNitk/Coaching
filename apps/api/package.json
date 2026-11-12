@@ -1,0 +1,21 @@
+{
+  "name": "@coaching/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/app.js",
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
+    "test": "node --test --test-concurrency=1"
+  },
+  "dependencies": {
+    "@coaching/auth": "workspace:*",
+    "@coaching/db": "workspace:*",
+    "@coaching/shared": "workspace:*",
+    "cookie-parser": "^1.4.7",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "zod": "^3.24.1"
+  }
+}

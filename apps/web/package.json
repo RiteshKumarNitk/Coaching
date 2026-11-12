@@ -1,0 +1,26 @@
+{
+  "name": "@coaching/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@coaching/shared": "workspace:*",
+    "@hookform/resolvers": "^3.9.1",
+    "@tanstack/react-query": "^5.62.2",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-hook-form": "^7.54.0",
+    "react-router-dom": "^6.28.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^6.0.3"
+  }
+}

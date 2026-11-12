@@ -1,0 +1,43 @@
+{
+  "name": "coaching-platform",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Zero-cost coaching management platform (Phase 1 foundation)",
+  "packageManager": "pnpm@10.18.3",
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter \"./apps/*\" run dev",
+    "dev:web": "pnpm --filter @coaching/web run dev",
+    "dev:api": "pnpm --filter @coaching/api run dev",
+    "build": "pnpm --filter @coaching/web run build",
+    "start": "pnpm --filter @coaching/api run start",
+    "lint": "eslint .",
+    "test": "pnpm --recursive --if-present run test",
+    "test:api": "pnpm --filter @coaching/api test",
+    "db:migrate": "node database/migrate.js",
+    "db:seed": "node database/seeds/dev-seed.js",
+    "create-admin": "node scripts/create-admin.js",
+    "import-students": "node scripts/import-students.js",
+    "export-database": "node scripts/export-database.js",
+    "icons": "node scripts/generate-icons.js",
+    "check:db": "node database/check.js"
+  },
+  "devDependencies": {
+    "@coaching/auth": "workspace:*",
+    "@coaching/db": "workspace:*",
+    "@coaching/shared": "workspace:*",
+    "@eslint/js": "^9.15.0",
+    "dotenv": "^16.4.7",
+    "eslint": "^9.15.0",
+    "eslint-plugin-react": "^7.37.2",
+    "globals": "^15.12.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}

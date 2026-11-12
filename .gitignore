@@ -1,0 +1,28 @@
+node_modules/
+dist/
+build/
+coverage/
+
+# Local environment / secrets
+.env
+.env.local
+.env.*.local
+*.pem
+
+# Local PGlite data directory (development database)
+.local/
+
+# Generated exports
+backups/
+*.csv
+!database/seeds/samples/*.csv
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs
+*.log
+logs/
