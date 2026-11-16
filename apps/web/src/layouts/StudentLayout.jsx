@@ -1,5 +1,5 @@
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { BookOpen, CalendarCheck, Home, LogOut, Megaphone, UserRound } from "lucide-react";
+import { BookOpen, CalendarCheck, ClipboardList, Home, LogOut, UserRound, Wallet } from "lucide-react";
 import { useAuth } from "../hooks/useAuth.js";
 import { initials } from "../utils/format.js";
 
@@ -64,13 +64,17 @@ export function StudentLayout() {
           <BookOpen size={19} aria-hidden="true" />
           Learn
         </NavLink>
+        <NavLink to="/student/exams" className={({ isActive }) => `bottom-nav__link${isActive ? " is-active" : ""}`}>
+          <ClipboardList size={19} aria-hidden="true" />
+          Tests
+        </NavLink>
         <NavLink to="/student/attendance" className={({ isActive }) => `bottom-nav__link${isActive ? " is-active" : ""}`}>
           <CalendarCheck size={19} aria-hidden="true" />
           Attendance
         </NavLink>
-        <NavLink to="/student/announcements" className={({ isActive }) => `bottom-nav__link${isActive ? " is-active" : ""}`}>
-          <Megaphone size={19} aria-hidden="true" />
-          Notices
+        <NavLink to="/student/fees" className={({ isActive }) => `bottom-nav__link${isActive ? " is-active" : ""}`}>
+          <Wallet size={19} aria-hidden="true" />
+          Fees
         </NavLink>
         <NavLink to="/student/profile" className={({ isActive }) => `bottom-nav__link${isActive ? " is-active" : ""}`}>
           <UserRound size={19} aria-hidden="true" />

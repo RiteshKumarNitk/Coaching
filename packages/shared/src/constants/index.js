@@ -8,7 +8,8 @@ export const ROLES = Object.freeze({
   SUPER_ADMIN: "super_admin",
   ADMIN: "admin",
   TEACHER: "teacher",
-  STUDENT: "student"
+  STUDENT: "student",
+  GUARDIAN: "guardian"
 });
 
 export const ALL_ROLES = Object.freeze(Object.values(ROLES));
@@ -17,7 +18,8 @@ export const ROLE_LABELS = Object.freeze({
   [ROLES.SUPER_ADMIN]: "Super Admin",
   [ROLES.ADMIN]: "Administrator",
   [ROLES.TEACHER]: "Teacher",
-  [ROLES.STUDENT]: "Student"
+  [ROLES.STUDENT]: "Student",
+  [ROLES.GUARDIAN]: "Guardian"
 });
 
 /** Landing route for each role after sign-in. */
@@ -25,7 +27,8 @@ export const ROLE_HOME = Object.freeze({
   [ROLES.SUPER_ADMIN]: "/admin",
   [ROLES.ADMIN]: "/admin",
   [ROLES.TEACHER]: "/teacher",
-  [ROLES.STUDENT]: "/student"
+  [ROLES.STUDENT]: "/student",
+  [ROLES.GUARDIAN]: "/guardian"
 });
 
 /** Roles that may use the administration area. */
@@ -88,7 +91,8 @@ export const ROLE_PERMISSIONS = Object.freeze({
     PERMISSIONS.ANNOUNCEMENTS_WRITE,
     PERMISSIONS.SELF_READ
   ]),
-  [ROLES.STUDENT]: Object.freeze([PERMISSIONS.EXAMS_ATTEMPT, PERMISSIONS.SELF_READ])
+  [ROLES.STUDENT]: Object.freeze([PERMISSIONS.EXAMS_ATTEMPT, PERMISSIONS.SELF_READ]),
+  [ROLES.GUARDIAN]: Object.freeze([PERMISSIONS.SELF_READ])
 });
 
 /** Does any of the given roles grant the permission? Server-side only. */
@@ -103,6 +107,7 @@ export function homeRouteForRoles(roles) {
   if (roles.includes(ROLES.SUPER_ADMIN) || roles.includes(ROLES.ADMIN)) return ROLE_HOME[ROLES.ADMIN];
   if (roles.includes(ROLES.TEACHER)) return ROLE_HOME[ROLES.TEACHER];
   if (roles.includes(ROLES.STUDENT)) return ROLE_HOME[ROLES.STUDENT];
+  if (roles.includes(ROLES.GUARDIAN)) return ROLE_HOME[ROLES.GUARDIAN];
   return "/login";
 }
 

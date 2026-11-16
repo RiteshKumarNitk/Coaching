@@ -5,8 +5,12 @@ import {
   PERMISSIONS,
   adminStudentCreateSchema,
   adminStudentUpdateSchema,
+  adminUserSchema,
+  adminUserUpdateSchema,
   adminTeacherCreateSchema,
   adminTeacherUpdateSchema,
+  announcementSchema,
+  announcementUpdateSchema,
   assignEnrollmentSchema,
   assignTeacherSchema,
   batchScheduleSchema,
@@ -18,8 +22,21 @@ import {
   createBatchSchema,
   createCourseSchema,
   createSubjectSchema,
+  examCreateSchema,
+  examQuestionSchema,
+  examQuestionUpdateSchema,
+  examUpdateSchema,
+  feeAssignSchema,
+  feeCorrectionSchema,
+  guardianAccessSchema,
+  feePaymentSchema,
+  feeUpdateSchema,
+  feeStructureSchema,
+  feeStructureUpdateSchema,
   paginationSchema,
   resetPasswordSchema,
+  responseEvaluationSchema,
+  settingsSchema,
   statusChangeSchema,
   subjectUpdateSchema
 } from "@coaching/shared";
@@ -31,7 +48,27 @@ const listQuerySchema = paginationSchema.extend({
   courseId: z.string().uuid().optional()
 });
 
-export function createAdminRouter({ authMiddleware, adminController }) {
+const examListQuery = paginationSchema.extend({
+  batchId: z.string().uuid().optional(),
+  status: z.enum(["draft", "scheduled", "published", "closed"]).optional(),
+  search: z.string().trim().max(120).optional()
+});
+
+const feeListQuery = paginationSchema.extend({
+  status: z.enum(["pending", "partial", "paid", "waived"]).optional(),
+  batchId: z.string().uuid().optional(),
+  courseId: z.string().uuid().optional(),
+  search: z.string().trim().max(120).optional()
+});
+
+export function createAdminRouter({
+  authMiddleware,
+  adminController,
+  examsController,
+  feesController,
+  announcementsController,
+  adminOpsController
+}) {
   const router = Router();
   router.use(authMiddleware.requireAuth, authMiddleware.requireRole(...ADMIN_ROLES));
 
@@ -41,6 +78,13 @@ export function createAdminRouter({ authMiddleware, adminController }) {
   const readTeachers = requirePermission(PERMISSIONS.TEACHERS_READ);
   const writeTeachers = requirePermission(PERMISSIONS.TEACHERS_WRITE);
   const manageAcademics = requirePermission(PERMISSIONS.COURSES_MANAGE);
+  const manageExams = requirePermission(PERMISSIONS.EXAMS_MANAGE);
+  const readFees = requirePermission(PERMISSIONS.FEES_READ);
+  const writeFees = requirePermission(PERMISSIONS.FEES_WRITE);
+  const manageAnnouncements = requirePermission(PERMISSIONS.ANNOUNCEMENTS_WRITE);
+  const manageAdmins = requirePermission(PERMISSIONS.ADMINS_MANAGE);
+  const manageSettings = requirePermission(PERMISSIONS.SETTINGS_MANAGE);
+  const readAudit = requirePermission(PERMISSIONS.AUDIT_READ);
 
   const idParams = z.object({ id: z.string().uuid() });
   const idAndEnrollment = z.object({ id: z.string().uuid(), enrollmentId: z.string().uuid() });
@@ -91,6 +135,12 @@ export function createAdminRouter({ authMiddleware, adminController }) {
     writeStudents,
     validate({ params: idParams, body: resetPasswordSchema }),
     asyncHandler(adminController.resetStudentPassword)
+  );
+  router.post(
+    "/students/:id/guardian-access",
+    writeStudents,
+    validate({ params: idParams, body: guardianAccessSchema }),
+    asyncHandler(adminController.grantGuardianAccess)
   );
 
   /* teachers */
@@ -204,6 +254,182 @@ export function createAdminRouter({ authMiddleware, adminController }) {
     manageAcademics,
     validate({ params: idAndSchedule }),
     asyncHandler(adminController.removeSchedule)
+  );
+
+  /* exams + question bank */
+  router.get("/exams", manageExams, validate({ query: examListQuery }), asyncHandler(examsController.list));
+  router.post("/exams", manageExams, validate({ body: examCreateSchema }), asyncHandler(examsController.create));
+  router.get("/exams/:id", manageExams, validate({ params: idParams }), asyncHandler(examsController.get));
+  router.patch(
+    "/exams/:id",
+    manageExams,
+    validate({ params: idParams, body: examUpdateSchema }),
+    asyncHandler(examsController.update)
+  );
+  router.delete("/exams/:id", manageExams, validate({ params: idParams }), asyncHandler(examsController.remove));
+  router.post(
+    "/exams/:id/questions",
+    manageExams,
+    validate({ params: idParams, body: examQuestionSchema }),
+    asyncHandler(examsController.addQuestion)
+  );
+  router.patch(
+    "/questions/:id",
+    manageExams,
+    validate({ params: idParams, body: examQuestionUpdateSchema }),
+    asyncHandler(examsController.updateQuestion)
+  );
+  router.delete("/questions/:id", manageExams, validate({ params: idParams }), asyncHandler(examsController.deleteQuestion));
+  router.get(
+    "/attempts/:id/responses",
+    manageExams,
+    validate({ params: idParams }),
+    asyncHandler(examsController.attemptResponses)
+  );
+  router.patch(
+    "/responses/:id",
+    manageExams,
+    validate({ params: idParams, body: responseEvaluationSchema }),
+    asyncHandler(examsController.evaluateResponse)
+  );
+  router.post(
+    "/exams/:id/publish-results",
+    manageExams,
+    validate({ params: idParams }),
+    asyncHandler(examsController.publishResults)
+  );
+
+  /* fees */
+  router.get("/fees/structures", readFees, validate({ query: feeListQuery }), asyncHandler(feesController.structures));
+  router.post(
+    "/fees/structures",
+    writeFees,
+    validate({ body: feeStructureSchema }),
+    asyncHandler(feesController.createStructure)
+  );
+  router.patch(
+    "/fees/structures/:id",
+    writeFees,
+    validate({ params: idParams, body: feeStructureUpdateSchema }),
+    asyncHandler(feesController.updateStructure)
+  );
+  router.get("/fees/dues", readFees, validate({ query: feeListQuery }), asyncHandler(feesController.dues));
+  router.post("/fees/assign", writeFees, validate({ body: feeAssignSchema }), asyncHandler(feesController.assign));
+  router.post(
+    "/fees/:id/payments",
+    writeFees,
+    validate({ params: idParams, body: feePaymentSchema }),
+    asyncHandler(feesController.recordPayment)
+  );
+  router.get("/fees/payments", readFees, validate({ query: feeListQuery }), asyncHandler(feesController.payments));
+  router.get(
+    "/fees/payments/:id/receipt",
+    readFees,
+    validate({ params: idParams }),
+    asyncHandler(feesController.receipt)
+  );
+  router.post(
+    "/fees/payments/:id/void",
+    writeFees,
+    validate({ params: idParams, body: feeCorrectionSchema }),
+    asyncHandler(feesController.voidPayment)
+  );
+  router.get(
+    "/fees/reminders",
+    readFees,
+    validate({ query: paginationSchema.extend({ batchId: z.string().uuid().optional() }) }),
+    asyncHandler(feesController.reminders)
+  );
+  router.post(
+    "/fees/:id/waive",
+    writeFees,
+    validate({ params: idParams, body: feeCorrectionSchema }),
+    asyncHandler(feesController.waive)
+  );
+  router.patch(
+    "/fees/:id",
+    writeFees,
+    validate({ params: idParams, body: feeUpdateSchema }),
+    asyncHandler(feesController.updateFee)
+  );
+
+  /* announcements */
+  router.get(
+    "/announcements",
+    manageAnnouncements,
+    validate({ query: paginationSchema.extend({ audience: z.enum(["all", "role", "course", "batch"]).optional() }) }),
+    asyncHandler(announcementsController.list)
+  );
+  router.post(
+    "/announcements",
+    manageAnnouncements,
+    validate({ body: announcementSchema }),
+    asyncHandler(announcementsController.create)
+  );
+  router.patch(
+    "/announcements/:id",
+    manageAnnouncements,
+    validate({ params: idParams, body: announcementUpdateSchema }),
+    asyncHandler(announcementsController.update)
+  );
+  router.delete(
+    "/announcements/:id",
+    manageAnnouncements,
+    validate({ params: idParams }),
+    asyncHandler(announcementsController.remove)
+  );
+
+  /* staff accounts (super_admin) */
+  router.get("/admins", manageAdmins, validate({ query: listQuerySchema }), asyncHandler(adminOpsController.listAdmins));
+  router.post("/admins", manageAdmins, validate({ body: adminUserSchema }), asyncHandler(adminOpsController.createAdmin));
+  router.patch(
+    "/admins/:id",
+    manageAdmins,
+    validate({ params: idParams, body: adminUserUpdateSchema }),
+    asyncHandler(adminOpsController.updateAdmin)
+  );
+  router.post(
+    "/admins/:id/password",
+    manageAdmins,
+    validate({ params: idParams, body: resetPasswordSchema }),
+    asyncHandler(adminOpsController.resetAdminPassword)
+  );
+
+  /* institute settings (super_admin) */
+  router.get("/settings", manageSettings, asyncHandler(adminOpsController.getSettings));
+  router.patch(
+    "/settings",
+    manageSettings,
+    validate({ body: settingsSchema }),
+    asyncHandler(adminOpsController.updateSettings)
+  );
+
+  /* audit trail (super_admin) */
+  router.get(
+    "/audit-logs",
+    readAudit,
+    validate({
+      query: paginationSchema.extend({
+        action: z.string().trim().max(80).optional(),
+        entityType: z.string().trim().max(60).optional()
+      })
+    }),
+    asyncHandler(adminOpsController.audit)
+  );
+
+  /* reports */
+  router.get("/reports/overview", readFees, asyncHandler(adminOpsController.overview));
+  router.get("/reports/fees.csv", readFees, asyncHandler(adminOpsController.feesCsv));
+  router.get(
+    "/reports/attendance.csv",
+    readFees,
+    validate({
+      query: z.object({
+        from: z.string().trim().max(10).optional(),
+        to: z.string().trim().max(10).optional()
+      })
+    }),
+    asyncHandler(adminOpsController.attendanceCsv)
   );
 
   return router;

@@ -31,6 +31,30 @@ export function AuthProvider({ children }) {
     };
   }, []);
 
+  // A 401 or a role-scoped 403 invalidates what this tab believes about the session:
+  // re-read it, so ProtectedRoute can send the user to the right area (or to /login).
+  useEffect(() => {
+    let busy = false;
+
+    async function recheckSession() {
+      if (busy) return;
+      busy = true;
+      queryClient.clear();
+      try {
+        const data = await authService.me();
+        setUser(data?.user ?? null);
+      } catch {
+        setUser(null);
+      } finally {
+        setStatus("ready");
+        busy = false;
+      }
+    }
+
+    window.addEventListener("auth:invalidate", recheckSession);
+    return () => window.removeEventListener("auth:invalidate", recheckSession);
+  }, [queryClient]);
+
   const login = useCallback(
     async (credentials) => {
       const data = await authService.login(credentials);
@@ -41,6 +65,12 @@ export function AuthProvider({ children }) {
     },
     [queryClient]
   );
+
+  const refresh = useCallback(async () => {
+    const data = await authService.me();
+    setUser(data?.user ?? null);
+    return data?.user ?? null;
+  }, []);
 
   const logout = useCallback(async () => {
     try {
@@ -59,9 +89,10 @@ export function AuthProvider({ children }) {
       isLoading: status === "loading",
       isAuthenticated: Boolean(user),
       login,
-      logout
+      logout,
+      refresh
     }),
-    [user, status, login, logout]
+    [user, status, login, logout, refresh]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -142,6 +142,12 @@ export const adminStudentUpdateSchema = adminStudentCreateSchema
   .partial()
   .extend({ status: userStatusSchema.optional() });
 
+/** Create a guardian login for a student and link it to their primary guardian row. */
+export const guardianAccessSchema = z.object({
+  email: emailSchema,
+  name: optionalText(120)
+});
+
 export const adminTeacherCreateSchema = z.object({
   fullName: personNameSchema,
   email: emailSchema,
@@ -301,6 +307,202 @@ export const assignmentSubmitSchema = z
     message: "Add your answer or a link to your work",
     path: ["contentText"]
   });
+
+/* ------------------------------------------------------------------ Phase 5 */
+
+const isoDateTime = z
+  .string()
+  .trim()
+  .min(10, "Use a date and time")
+  .max(40)
+  .refine((value) => !Number.isNaN(new Date(value).getTime()), "Use a valid date and time");
+
+const examFields = {
+  batchId: uuidSchema,
+  subjectId: uuidSchema.optional().or(z.literal("")),
+  title: z.string().trim().min(3, "Title is required").max(200),
+  description: optionalText(2000),
+  instructions: optionalText(4000),
+  examType: z.enum(["mcq", "subjective", "mixed"]).optional(),
+  startsAt: isoDateTime,
+  endsAt: isoDateTime,
+  durationMinutes: z.coerce.number().int().min(1).max(480),
+  passMarks: z.coerce.number().min(0).max(1000).optional(),
+  maxAttempts: z.coerce.number().int().min(1).max(5).optional(),
+  shuffleQuestions: z.boolean().optional(),
+  status: z.enum(["draft", "scheduled", "published", "closed"]).optional()
+};
+
+export const examCreateSchema = z
+  .object(examFields)
+  .refine((value) => new Date(value.endsAt).getTime() > new Date(value.startsAt).getTime(), {
+    message: "The exam must end after it starts",
+    path: ["endsAt"]
+  });
+
+export const examUpdateSchema = z.object(examFields).partial();
+
+const examOptionSchema = z.object({
+  text: z.string().trim().min(1, "Option text is required").max(500),
+  isCorrect: z.boolean().optional()
+});
+
+const examQuestionFields = {
+  questionType: z.enum(["mcq", "subjective"]).optional(),
+  questionText: z.string().trim().min(3, "Question text is required").max(4000),
+  explanation: optionalText(2000),
+  marks: z.coerce.number().min(0.01).max(100),
+  negativeMarks: z.coerce.number().min(0).max(100).optional(),
+  sortOrder: z.coerce.number().int().min(0).max(9999).optional(),
+  options: z.array(examOptionSchema).max(6).optional(),
+  modelAnswer: optionalText(4000)
+};
+
+export const examQuestionSchema = z.object(examQuestionFields).superRefine((value, ctx) => {
+  const type = value.questionType ?? "mcq";
+  if (type === "mcq") {
+    const options = value.options ?? [];
+    if (options.length < 2) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Add at least two options", path: ["options"] });
+    }
+    if (options.filter((option) => option.isCorrect).length !== 1) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Mark exactly one correct option", path: ["options"] });
+    }
+  } else if (!value.modelAnswer) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Add a model answer", path: ["modelAnswer"] });
+  }
+});
+
+export const examQuestionUpdateSchema = z.object(examQuestionFields).partial();
+
+export const examAnswerSaveSchema = z.object({
+  answers: z
+    .array(
+      z.object({
+        questionId: uuidSchema,
+        selectedOptionId: uuidSchema.optional().nullable(),
+        answerText: optionalText(8000),
+        markedForReview: z.boolean().optional()
+      })
+    )
+    .min(1, "Nothing to save")
+    .max(300)
+});
+
+export const responseEvaluationSchema = z.object({
+  awardedMarks: z.coerce.number().min(0).max(1000)
+});
+
+/* ------------------------------------------------------------------ Phase 6 */
+
+const feeStructureFields = {
+  courseId: uuidSchema,
+  name: z.string().trim().min(3, "Name is required").max(120),
+  academicYear: z.string().trim().min(4, "Academic year is required").max(20),
+  totalAmount: z.coerce.number().min(0).max(10_000_000),
+  installments: z.coerce.number().int().min(1).max(12).optional(),
+  status: z.enum(["active", "inactive"]).optional()
+};
+
+export const feeStructureSchema = z.object(feeStructureFields);
+export const feeStructureUpdateSchema = z.object(feeStructureFields).partial();
+
+export const feeAssignSchema = z.object({
+  studentId: uuidSchema,
+  feeStructureId: uuidSchema,
+  discountAmount: z.coerce.number().min(0).max(10_000_000).optional(),
+  dueDate: z.string().trim().max(40).optional().or(z.literal("")),
+  notes: optionalText(500)
+});
+
+export const feePaymentSchema = z.object({
+  amount: z.coerce.number().min(1, "Enter the amount received").max(10_000_000),
+  method: z.enum(["cash", "upi", "bank_transfer", "cheque", "card", "other"]),
+  paidAt: z.string().trim().max(40).optional().or(z.literal("")),
+  reference: optionalText(120),
+  notes: optionalText(500)
+});
+
+export const feeCorrectionSchema = z.object({
+  reason: z.string().trim().min(3, "Say why this is being corrected").max(300)
+});
+
+export const feeUpdateSchema = z.object({
+  dueDate: z.string().trim().max(40).optional().or(z.literal("")),
+  discountAmount: z.coerce.number().min(0).max(10_000_000).optional(),
+  notes: optionalText(500)
+});
+
+/* ---------------------------------------------------------------- Phase 11 */
+
+export const adminUserSchema = z.object({
+  fullName: personNameSchema,
+  email: emailSchema,
+  password: passwordSchema.optional().or(z.literal("")),
+  phone: phoneSchema.optional().or(z.literal("")),
+  roleCode: z.enum(["admin", "super_admin"]).default("admin")
+});
+
+export const adminUserUpdateSchema = z.object({
+  fullName: personNameSchema.optional(),
+  phone: phoneSchema.optional().or(z.literal("")),
+  status: userStatusSchema.optional(),
+  roleCode: z.enum(["admin", "super_admin"]).optional()
+});
+
+const settingText = (max) => z.string().trim().max(max).optional().or(z.literal(""));
+
+export const settingsSchema = z
+  .object({
+    instituteName: settingText(120),
+    instituteAddress: settingText(300),
+    institutePhone: settingText(30),
+    instituteEmail: settingText(120),
+    receiptFooter: settingText(200)
+  })
+  .partial();
+
+/* ------------------------------------------------------------------ Phase 8 */
+
+const announcementFields = {
+  title: z.string().trim().min(3, "Title is required").max(200),
+  body: z.string().trim().min(3, "Write the notice").max(4000),
+  audience: z.enum(["all", "role", "course", "batch"]).default("all"),
+  roleCode: z.enum(["admin", "teacher", "student"]).optional().or(z.literal("")),
+  courseId: uuidSchema.optional().or(z.literal("")),
+  batchId: uuidSchema.optional().or(z.literal("")),
+  isPinned: z.boolean().optional(),
+  expiresAt: z.string().trim().max(40).optional().or(z.literal(""))
+};
+
+export const announcementSchema = z.object(announcementFields).superRefine((value, ctx) => {
+  if (value.audience === "role" && !value.roleCode) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Choose which role should see this", path: ["roleCode"] });
+  }
+  if (value.audience === "course" && !value.courseId) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Choose a course", path: ["courseId"] });
+  }
+  if (value.audience === "batch" && !value.batchId) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Choose a batch", path: ["batchId"] });
+  }
+});
+
+export const teacherAnnouncementSchema = z.object({
+  title: announcementFields.title,
+  body: announcementFields.body,
+  batchId: uuidSchema,
+  isPinned: z.boolean().optional(),
+  expiresAt: announcementFields.expiresAt
+});
+
+export const announcementUpdateSchema = z
+  .object({
+    title: announcementFields.title,
+    body: announcementFields.body,
+    isPinned: z.boolean(),
+    expiresAt: announcementFields.expiresAt
+  })
+  .partial();
 
 export function formatZodError(error) {
   const details = error.issues.map((issue) => ({

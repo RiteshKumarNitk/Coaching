@@ -52,8 +52,7 @@ const TABLES = [
   "payments",
   "announcements",
   "notifications",
-  "audit_logs",
-  "system_settings"
+  "audit_logs"
 ];
 
 const STRIPPED_COLUMNS = {

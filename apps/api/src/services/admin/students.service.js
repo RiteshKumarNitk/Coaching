@@ -17,6 +17,7 @@ const dateOnly = (value) => {
 /** Columns that a PATCH may change, mapped to their SQL names. */
 const EDITABLE = {
   fullName: "full_name",
+  email: "email",
   phone: "phone",
   status: "status",
   enrollmentNo: "enrollment_no",
@@ -128,7 +129,12 @@ export function createStudentsService(db, audit) {
 
     const [guardians, enrollments, attendance, fees, results] = await Promise.all([
       db.many(
-        `SELECT id, name, relation, phone, email, is_primary FROM guardian_profiles WHERE student_id = $1 ORDER BY is_primary DESC`,
+        `SELECT gp.id, gp.name, gp.relation, gp.phone, gp.email, gp.is_primary, gp.user_id,
+                gu.email AS login_email
+         FROM guardian_profiles gp
+         LEFT JOIN users gu ON gu.id = gp.user_id
+         WHERE gp.student_id = $1
+         ORDER BY gp.is_primary DESC`,
         [id]
       ),
       db.many(
@@ -191,7 +197,9 @@ export function createStudentsService(db, audit) {
         relation: guardian.relation,
         phone: guardian.phone,
         email: guardian.email,
-        isPrimary: guardian.is_primary
+        isPrimary: guardian.is_primary,
+        hasLogin: Boolean(guardian.user_id),
+        loginEmail: guardian.login_email ?? null
       })),
       enrollments: enrollments.map((enrollment) => ({
         id: enrollment.id,
@@ -233,9 +241,9 @@ export function createStudentsService(db, audit) {
       if (duplicate) throw conflict("A user with this email or enrolment number already exists");
 
       const { rows } = await tx.query(
-        `INSERT INTO users (email, password_hash, full_name, phone, created_by)
-         VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-        [payload.email, hashPassword(password), payload.fullName, nullIfEmpty(payload.phone), actor.id]
+        `INSERT INTO users (email, password_hash, full_name, phone, created_by, must_change_password)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+        [payload.email, hashPassword(password), payload.fullName, nullIfEmpty(payload.phone), actor.id, !payload.password]
       );
       const userId = rows[0].id;
       await tx.query("INSERT INTO user_roles (user_id, role_code, granted_by) VALUES ($1, 'student', $2)", [
@@ -292,7 +300,8 @@ export function createStudentsService(db, audit) {
     const existing = await db.one("SELECT u.id FROM users u JOIN student_profiles sp ON sp.user_id = u.id WHERE u.id = $1", [id]);
     if (!existing) throw notFound("Student not found");
 
-    await db.transaction(async (tx) => {
+    try {
+      await db.transaction(async (tx) => {
       const userSets = [];
       const userValues = [];
       const profileSets = [];
@@ -340,7 +349,11 @@ export function createStudentsService(db, audit) {
       if (payload.status && payload.status !== "active") {
         await tx.query("UPDATE sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL", [id]);
       }
-    });
+      });
+    } catch (error) {
+      if (error.code === "23505") throw conflict("That email is already used by another account");
+      throw error;
+    }
 
     await audit.record({
       actorId: actor.id,
@@ -426,7 +439,7 @@ export function createStudentsService(db, audit) {
 
     await db.transaction(async (tx) => {
       await tx.query(
-        `UPDATE users SET password_hash = $2, password_changed_at = now(),
+        `UPDATE users SET password_hash = $2, password_changed_at = now(), must_change_password = true,
                 failed_login_attempts = 0, locked_until = NULL, updated_at = now()
          WHERE id = $1`,
         [id, hashPassword(nextPassword)]
@@ -443,6 +456,74 @@ export function createStudentsService(db, audit) {
       ip
     });
     return { temporaryPassword: useGenerated ? nextPassword : null };
+  }
+
+  /**
+   * Create a read-only guardian account and link it to the student's guardian row.
+   * The temporary password is returned once; the app forces a change at first sign-in.
+   */
+  async function grantGuardianAccess(id, { email, name }, actor, ip) {
+    const student = await db.one(
+      "SELECT u.id, u.full_name FROM users u JOIN student_profiles sp ON sp.user_id = u.id WHERE u.id = $1",
+      [id]
+    );
+    if (!student) throw notFound("Student not found");
+
+    const temporaryPassword = generatePassword(12);
+    let guardianUserId;
+
+    try {
+      guardianUserId = await db.transaction(async (tx) => {
+        const duplicate = await tx.one("SELECT id FROM users WHERE lower(email) = lower($1)", [email]);
+        if (duplicate) throw conflict("That email already has an account");
+
+        const { rows } = await tx.query(
+          `INSERT INTO users (email, password_hash, full_name, must_change_password, created_by)
+           VALUES ($1, $2, $3, true, $4) RETURNING id`,
+          [email, hashPassword(temporaryPassword), name || `${student.full_name} Guardian`, actor.id]
+        );
+        const userId = rows[0].id;
+        await tx.query("INSERT INTO user_roles (user_id, role_code, granted_by) VALUES ($1, 'guardian', $2)", [
+          userId,
+          actor.id
+        ]);
+
+        const profile = await tx.one(
+          `SELECT id FROM guardian_profiles WHERE student_id = $1
+           ORDER BY is_primary DESC, created_at LIMIT 1`,
+          [id]
+        );
+        if (profile) {
+          await tx.query(
+            `UPDATE guardian_profiles SET user_id = $2, email = COALESCE(email, $3), updated_at = now()
+             WHERE id = $1`,
+            [profile.id, userId, email]
+          );
+        } else {
+          await tx.query(
+            `INSERT INTO guardian_profiles (student_id, name, relation, email, user_id, is_primary)
+             VALUES ($1, $2, 'guardian', $3, $4, true)`,
+            [id, name || `${student.full_name} Guardian`, email, userId]
+          );
+        }
+        return userId;
+      });
+    } catch (error) {
+      if (error.code === "23505") throw conflict("That email already has an account");
+      throw error;
+    }
+
+    await audit.record({
+      actorId: actor.id,
+      actorEmail: actor.email,
+      action: "guardian.access_granted",
+      entityType: "student",
+      entityId: id,
+      metadata: { guardianUserId, email },
+      ip
+    });
+
+    return { guardianUserId, email, temporaryPassword };
   }
 
   async function exportCsv() {
@@ -512,7 +593,8 @@ export function createStudentsService(db, audit) {
 
         const temporaryPassword = generatePassword(12);
         const { rows: userRows } = await tx.query(
-          `INSERT INTO users (email, password_hash, full_name, phone, created_by) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+          `INSERT INTO users (email, password_hash, full_name, phone, created_by, must_change_password)
+           VALUES ($1, $2, $3, $4, $5, true) RETURNING id`,
           [row.email, hashPassword(temporaryPassword), row.full_name, nullIfEmpty(row.phone), actor.id]
         );
         const userId = userRows[0].id;
@@ -562,6 +644,7 @@ export function createStudentsService(db, audit) {
     assignEnrollment,
     removeEnrollment,
     resetPassword,
+    grantGuardianAccess,
     exportCsv,
     importCsv
   };

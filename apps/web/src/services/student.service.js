@@ -25,5 +25,14 @@ export const studentService = {
   submitAssignment: (id, payload) => api.post(`/api/student/assignments/${id}/submissions`, payload),
 
   attendance: (params) => api.get(`/api/student/attendance${query(params)}`),
-  announcements: (params) => api.get(`/api/student/announcements${query(params)}`)
+  announcements: (params) => api.get(`/api/student/announcements${query(params)}`),
+
+  exams: (params) => api.get(`/api/student/exams${query(params)}`),
+  startAttempt: (examId) => api.post(`/api/student/exams/${examId}/attempts`, {}),
+  attempt: (id) => api.get(`/api/student/attempts/${id}`),
+  saveAnswers: (id, answers) => api.patch(`/api/student/attempts/${id}/answers`, { answers }),
+  submitAttempt: (id) => api.post(`/api/student/attempts/${id}/submit`, {}),
+  results: (params) => api.get(`/api/student/results${query(params)}`),
+
+  fees: () => api.get("/api/student/fees")
 };

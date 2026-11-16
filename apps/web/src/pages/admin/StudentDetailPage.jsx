@@ -28,6 +28,9 @@ export function StudentDetailPage() {
   const [editOpen, setEditOpen] = useState(false);
   const [enrollOpen, setEnrollOpen] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
+  const [guardianOpen, setGuardianOpen] = useState(false);
+  const [guardianEmail, setGuardianEmail] = useState("");
+  const [guardianLogin, setGuardianLogin] = useState(null);
   const [enrollBatchId, setEnrollBatchId] = useState("");
   const [tempPassword, setTempPassword] = useState(null);
   const [actionError, setActionError] = useState(null);
@@ -81,6 +84,15 @@ export function StudentDetailPage() {
     mutationFn: (enrollmentId) => adminService.unenrollStudent(id, enrollmentId),
     onSuccess: () => {
       setPending(null);
+      invalidate();
+    }
+  });
+
+  const guardianMutation = useMutation({
+    mutationFn: () =>
+      adminService.grantGuardianAccess(id, { email: guardianEmail, name: detail?.guardians[0]?.name || "" }),
+    onSuccess: (data) => {
+      setGuardianLogin(data);
       invalidate();
     }
   });
@@ -224,7 +236,26 @@ export function StudentDetailPage() {
         </SectionCard>
 
         <div className="stack" style={{ gap: 18 }}>
-          <SectionCard title="Guardian" subtitle="Primary contact">
+          <SectionCard
+            title="Guardian"
+            subtitle="Primary contact"
+            action={
+              detail.guardians.some((guardian) => guardian.hasLogin) ? null : (
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--sm"
+                  onClick={() => {
+                    guardianMutation.reset();
+                    setGuardianLogin(null);
+                    setGuardianEmail(detail.guardians[0]?.email ?? "");
+                    setGuardianOpen(true);
+                  }}
+                >
+                  <KeyRound size={14} /> Portal login
+                </button>
+              )
+            }
+          >
             {detail.guardians.length === 0 ? (
               <EmptyState icon={UserRound} title="No guardian recorded" description="Use Edit to add a guardian contact." />
             ) : (
@@ -235,6 +266,12 @@ export function StudentDetailPage() {
                     <dd>
                       {guardian.name}
                       {guardian.phone ? ` · ${guardian.phone}` : ""}
+                      {guardian.hasLogin ? (
+                        <>
+                          {" "}
+                          <Badge tone="success">Portal: {guardian.loginEmail}</Badge>
+                        </>
+                      ) : null}
                     </dd>
                   </div>
                 ))}
@@ -484,6 +521,58 @@ export function StudentDetailPage() {
           <TempPasswordNotice password={tempPassword} email={student.email} />
         ) : (
           <p className="small muted">The current password stops working immediately.</p>
+        )}
+      </Modal>
+
+      <Modal
+        open={guardianOpen}
+        title="Guardian portal login"
+        description="Creates a read-only account for the guardian: attendance, fees and published results only."
+        onClose={() => {
+          setGuardianOpen(false);
+          setGuardianLogin(null);
+          guardianMutation.reset();
+        }}
+        footer={
+          guardianLogin ? (
+            <button type="button" className="btn btn--primary" onClick={() => setGuardianOpen(false)}>
+              Done
+            </button>
+          ) : (
+            <>
+              <button type="button" className="btn btn--ghost" onClick={() => setGuardianOpen(false)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn--primary"
+                disabled={!guardianEmail || guardianMutation.isPending}
+                onClick={() => guardianMutation.mutate()}
+              >
+                {guardianMutation.isPending ? "Creating…" : "Create login"}
+              </button>
+            </>
+          )
+        }
+      >
+        {guardianMutation.isError ? (
+          <div className="alert alert--error" role="alert" style={{ marginBottom: 12 }}>
+            {guardianMutation.error.message}
+          </div>
+        ) : null}
+        {guardianLogin ? (
+          <TempPasswordNotice password={guardianLogin.temporaryPassword} email={guardianLogin.email} />
+        ) : (
+          <FormField label="Guardian email" htmlFor="guardian-email">
+            <input
+              id="guardian-email"
+              className="input"
+              type="email"
+              value={guardianEmail}
+              onChange={(event) => setGuardianEmail(event.target.value)}
+              placeholder="parent@example.com"
+            />
+          </FormField>
         )}
       </Modal>
 

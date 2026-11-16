@@ -7,93 +7,118 @@ const num = (value) => Number(value ?? 0);
 export function createDashboardService(db) {
   return {
     async admin() {
-      const [
+      // One round trip: over a remote database the eight separate queries spent more
+      // time on the wire than in Postgres, so they are assembled into a single JSON row.
+      const { payload } = await db.one(`
+        SELECT json_build_object(
+          'counts', (
+            SELECT json_build_object(
+              'total_students', (SELECT count(*)::int FROM student_profiles),
+              'active_students', (SELECT count(*)::int FROM student_profiles sp JOIN users u ON u.id = sp.user_id WHERE u.status = 'active'),
+              'total_teachers', (SELECT count(*)::int FROM teacher_profiles),
+              'active_teachers', (SELECT count(*)::int FROM teacher_profiles tp JOIN users u ON u.id = tp.user_id WHERE u.status = 'active'),
+              'active_courses', (SELECT count(*)::int FROM courses WHERE status = 'active'),
+              'active_batches', (SELECT count(*)::int FROM batches WHERE status = 'active'),
+              'upcoming_exams', (SELECT count(*)::int FROM exams WHERE status IN ('scheduled', 'published') AND starts_at >= now()),
+              'announcements', (SELECT count(*)::int FROM announcements WHERE published_at IS NOT NULL)
+            )
+          ),
+          'attendance_today', (
+            SELECT json_build_object(
+              'marked', count(*)::int,
+              'present', count(*) FILTER (WHERE status IN ('present', 'late'))::int
+            )
+            FROM attendance WHERE session_date = CURRENT_DATE
+          ),
+          'pending_fees', (
+            SELECT json_build_object(
+              'pending_amount', COALESCE(SUM(sf.net_amount - COALESCE(p.paid, 0)), 0)::numeric,
+              'pending_count', count(*) FILTER (WHERE sf.net_amount - COALESCE(p.paid, 0) > 0)::int
+            )
+            FROM student_fees sf
+            LEFT JOIN (SELECT student_fee_id, SUM(amount) AS paid FROM payments GROUP BY student_fee_id) p
+              ON p.student_fee_id = sf.id
+            WHERE sf.status <> 'waived'
+          ),
+          'recent_admissions', (
+            SELECT COALESCE(json_agg(row_to_json(admission)), '[]'::json)
+            FROM (
+              SELECT u.id, u.full_name, u.email, sp.enrollment_no, sp.admission_date,
+                     c.name AS course_name, b.name AS batch_name
+              FROM student_profiles sp
+              JOIN users u ON u.id = sp.user_id
+              LEFT JOIN LATERAL (
+                SELECT c.name FROM enrollments e JOIN courses c ON c.id = e.course_id
+                WHERE e.student_id = sp.user_id AND e.status = 'active'
+                ORDER BY e.enrolled_at DESC LIMIT 1
+              ) c ON true
+              LEFT JOIN LATERAL (
+                SELECT b.name FROM enrollments e JOIN batches b ON b.id = e.batch_id
+                WHERE e.student_id = sp.user_id AND e.status = 'active'
+                ORDER BY e.enrolled_at DESC LIMIT 1
+              ) b ON true
+              ORDER BY sp.created_at DESC
+              LIMIT 5
+            ) admission
+          ),
+          'admissions_trend', (
+            SELECT COALESCE(json_agg(row_to_json(trend)), '[]'::json)
+            FROM (
+              SELECT to_char(date_trunc('month', sp.admission_date), 'Mon') AS label,
+                     date_trunc('month', sp.admission_date) AS month,
+                     count(*)::int AS count
+              FROM student_profiles sp
+              WHERE sp.admission_date >= date_trunc('month', CURRENT_DATE) - interval '5 months'
+              GROUP BY 1, 2
+              ORDER BY 2
+            ) trend
+          ),
+          'attendance_trend', (
+            SELECT COALESCE(json_agg(row_to_json(trend)), '[]'::json)
+            FROM (
+              SELECT session_date::text AS date,
+                     count(*) FILTER (WHERE status IN ('present', 'late'))::int AS present,
+                     count(*)::int AS total
+              FROM attendance
+              WHERE session_date >= CURRENT_DATE - interval '13 days'
+              GROUP BY session_date
+              ORDER BY session_date
+            ) trend
+          ),
+          'upcoming_exams', (
+            SELECT COALESCE(json_agg(row_to_json(exam)), '[]'::json)
+            FROM (
+              SELECT e.id, e.title, e.starts_at, e.duration_minutes, b.name AS batch_name, s.name AS subject_name
+              FROM exams e
+              JOIN batches b ON b.id = e.batch_id
+              LEFT JOIN subjects s ON s.id = e.subject_id
+              WHERE e.status IN ('scheduled', 'published') AND e.starts_at >= now()
+              ORDER BY e.starts_at
+              LIMIT 5
+            ) exam
+          ),
+          'announcements', (
+            SELECT COALESCE(json_agg(row_to_json(notice)), '[]'::json)
+            FROM (
+              SELECT a.id, a.title, a.body, a.published_at, a.is_pinned
+              FROM announcements a
+              WHERE a.published_at IS NOT NULL AND (a.expires_at IS NULL OR a.expires_at > now())
+              ORDER BY a.is_pinned DESC, a.published_at DESC
+              LIMIT 4
+            ) notice
+          )
+        ) AS payload
+      `);
+      const {
         counts,
-        attendanceToday,
-        pendingFees,
-        recentAdmissions,
-        admissionsTrend,
-        attendanceTrend,
-        upcomingExams,
+        attendance_today: attendanceToday,
+        pending_fees: pendingFees,
+        recent_admissions: recentAdmissions,
+        admissions_trend: admissionsTrend,
+        attendance_trend: attendanceTrend,
+        upcoming_exams: upcomingExams,
         announcements
-      ] = await Promise.all([
-        db.one(`
-          SELECT
-            (SELECT count(*)::int FROM student_profiles) AS total_students,
-            (SELECT count(*)::int FROM student_profiles sp JOIN users u ON u.id = sp.user_id WHERE u.status = 'active') AS active_students,
-            (SELECT count(*)::int FROM teacher_profiles) AS total_teachers,
-            (SELECT count(*)::int FROM teacher_profiles tp JOIN users u ON u.id = tp.user_id WHERE u.status = 'active') AS active_teachers,
-            (SELECT count(*)::int FROM courses WHERE status = 'active') AS active_courses,
-            (SELECT count(*)::int FROM batches WHERE status = 'active') AS active_batches,
-            (SELECT count(*)::int FROM exams WHERE status IN ('scheduled', 'published') AND starts_at >= now()) AS upcoming_exams,
-            (SELECT count(*)::int FROM announcements WHERE published_at IS NOT NULL) AS announcements
-        `),
-        db.one(`
-          SELECT count(*)::int AS marked,
-                 count(*) FILTER (WHERE status IN ('present', 'late'))::int AS present
-          FROM attendance WHERE session_date = CURRENT_DATE
-        `),
-        db.one(`
-          SELECT COALESCE(SUM(sf.net_amount - COALESCE(p.paid, 0)), 0)::numeric AS pending_amount,
-                 count(*) FILTER (WHERE sf.net_amount - COALESCE(p.paid, 0) > 0)::int AS pending_count
-          FROM student_fees sf
-          LEFT JOIN (SELECT student_fee_id, SUM(amount) AS paid FROM payments GROUP BY student_fee_id) p
-            ON p.student_fee_id = sf.id
-          WHERE sf.status <> 'waived'
-        `),
-        db.many(`
-          SELECT u.id, u.full_name, u.email, sp.enrollment_no, sp.admission_date,
-                 c.name AS course_name, b.name AS batch_name
-          FROM student_profiles sp
-          JOIN users u ON u.id = sp.user_id
-          LEFT JOIN LATERAL (
-            SELECT c.name FROM enrollments e JOIN courses c ON c.id = e.course_id
-            WHERE e.student_id = sp.user_id AND e.status = 'active'
-            ORDER BY e.enrolled_at DESC LIMIT 1
-          ) c ON true
-          LEFT JOIN LATERAL (
-            SELECT b.name FROM enrollments e JOIN batches b ON b.id = e.batch_id
-            WHERE e.student_id = sp.user_id AND e.status = 'active'
-            ORDER BY e.enrolled_at DESC LIMIT 1
-          ) b ON true
-          ORDER BY sp.created_at DESC
-          LIMIT 5
-        `),
-        db.many(`
-          SELECT to_char(date_trunc('month', sp.admission_date), 'Mon') AS label,
-                 date_trunc('month', sp.admission_date) AS month,
-                 count(*)::int AS count
-          FROM student_profiles sp
-          WHERE sp.admission_date >= date_trunc('month', CURRENT_DATE) - interval '5 months'
-          GROUP BY 1, 2
-          ORDER BY 2
-        `),
-        db.many(`
-          SELECT session_date::text AS date,
-                 count(*) FILTER (WHERE status IN ('present', 'late'))::int AS present,
-                 count(*)::int AS total
-          FROM attendance
-          WHERE session_date >= CURRENT_DATE - interval '13 days'
-          GROUP BY session_date
-          ORDER BY session_date
-        `),
-        db.many(`
-          SELECT e.id, e.title, e.starts_at, e.duration_minutes, b.name AS batch_name, s.name AS subject_name
-          FROM exams e
-          JOIN batches b ON b.id = e.batch_id
-          LEFT JOIN subjects s ON s.id = e.subject_id
-          WHERE e.status IN ('scheduled', 'published') AND e.starts_at >= now()
-          ORDER BY e.starts_at
-          LIMIT 5
-        `),
-        db.many(`
-          SELECT a.id, a.title, a.body, a.published_at, a.is_pinned
-          FROM announcements a
-          WHERE a.published_at IS NOT NULL AND (a.expires_at IS NULL OR a.expires_at > now())
-          ORDER BY a.is_pinned DESC, a.published_at DESC
-          LIMIT 4
-        `)
-      ]);
+      } = payload;
 
       return {
         metrics: {

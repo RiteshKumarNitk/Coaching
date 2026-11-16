@@ -17,13 +17,17 @@
     "lint": "eslint .",
     "test": "pnpm --recursive --if-present run test",
     "test:api": "pnpm --filter @coaching/api test",
+    "smoke:ui": "node scripts/smoke-ui.js",
     "db:migrate": "node database/migrate.js",
     "db:seed": "node database/seeds/dev-seed.js",
+    "db:clean": "node scripts/clean-demo-data.js",
     "create-admin": "node scripts/create-admin.js",
     "import-students": "node scripts/import-students.js",
     "export-database": "node scripts/export-database.js",
     "icons": "node scripts/generate-icons.js",
-    "check:db": "node database/check.js"
+    "check:db": "node database/check.js",
+    "check:env": "node scripts/preflight.js",
+    "load:test": "node scripts/load-test.js"
   },
   "devDependencies": {
     "@coaching/auth": "workspace:*",

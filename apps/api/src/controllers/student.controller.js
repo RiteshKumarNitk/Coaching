@@ -1,4 +1,4 @@
-export function createStudentController({ student }) {
+export function createStudentController({ student, fees }) {
   const actorOf = (req) => ({ id: req.user.id, email: req.user.email, roles: req.user.roles });
 
   return {
@@ -53,6 +53,40 @@ export function createStudentController({ student }) {
     announcements: async (req, res) => {
       res.setHeader("Cache-Control", "no-store");
       res.json(await student.listAnnouncements(req.user.id, req.query));
+    },
+
+    exams: async (req, res) => {
+      res.setHeader("Cache-Control", "no-store");
+      res.json(await student.listExams(req.user.id, req.query));
+    },
+
+    startAttempt: async (req, res) => {
+      res.status(201).json(await student.startAttempt(req.user.id, req.params.id, actorOf(req), req.ip));
+    },
+
+    attempt: async (req, res) => {
+      res.setHeader("Cache-Control", "no-store");
+      res.json(await student.getAttempt(req.user.id, req.params.id));
+    },
+
+    saveAnswers: async (req, res) => {
+      res.json(
+        await student.saveAttemptAnswers(req.user.id, req.params.id, req.body.answers, actorOf(req), req.ip)
+      );
+    },
+
+    submitAttempt: async (req, res) => {
+      res.json(await student.submitAttempt(req.user.id, req.params.id, actorOf(req), req.ip));
+    },
+
+    results: async (req, res) => {
+      res.setHeader("Cache-Control", "no-store");
+      res.json(await student.listResults(req.user.id, req.query));
+    },
+
+    fees: async (req, res) => {
+      res.setHeader("Cache-Control", "no-store");
+      res.json(await fees.studentFees(req.user.id));
     }
   };
 }

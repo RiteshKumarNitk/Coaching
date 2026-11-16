@@ -49,7 +49,7 @@ dance, and no token in `localStorage`.
 4. **Session resolution**: read `cp_session`, hash it (SHA-256), load the session, user
    and aggregated roles in one query. Sessions are rejected if revoked, expired or the
    account is not active.
-5. **Rate limiting** (global 600/min/IP; login 10/15 min/IP).
+5. **Rate limiting** (global 600/min/IP; login 30/15 min/IP).
 6. **Route middleware**: `requireAuth` → `requireRole` / `requirePermission`.
 7. **Validation**: zod schemas from `@coaching/shared` replace `req.body`.
 8. **Controller → service → SQL** with bound parameters inside one connection.
@@ -67,8 +67,10 @@ Two layers:
   layout. Hiding a button is never treated as authorization.
 - **Row ownership** in SQL. Every student query filters by `req.user.id`
   (`student_profiles.user_id = $1`), never by a client-supplied id. Teacher queries join
-  `batch_teachers` so only assigned batches are visible. This pattern is what Phase 2
-  CRUD routes must follow.
+  `batch_teachers` so only assigned batches are visible. Guardian queries require a
+  `guardian_profiles` row with `user_id = req.user.id` and the requested `student_id`, and
+  answer 404 otherwise (they do not reveal whether the child exists). This pattern is what
+  Phase 2 CRUD routes must follow.
 
 | Capability | super_admin | admin | teacher | student |
 | --- | --- | --- | --- | --- |
@@ -77,6 +79,7 @@ Two layers:
 | Students, courses, batches, fees | ✅ | ✅ | — | — |
 | Own batch content, attendance, exams | ✅ | ✅ | ✅ | — |
 | Attempt exams, own records | — | — | — | ✅ |
+| Child's attendance, fees, published results (read-only) | — | — | — | guardian |
 
 ## 5. Session and password handling
 
@@ -115,18 +118,23 @@ Required in later phases (not yet implemented): every list route must paginate
 (`pageSize ≤ 100`, default 20), use server-side search, and never `SELECT *` across all
 students. Exam autosave must upsert per question with attempt ownership checks.
 
-## 8. Known limitations (Phase 1)
+## 8. Known limitations (current)
 
 - No password-reset email flow: sending email requires an external provider. Offices
-  should reset passwords via the admin CLI until a free transactional email option is
-  verified. Reset tokens/table are intentionally absent rather than half-built.
+  reset passwords through the admin screens or CLI; reset tokens are intentionally absent
+  rather than half-built.
 - In-memory rate limiting is per process. A multi-instance deployment needs a shared
   counter (or a single instance).
 - No refresh-token rotation; sessions are fixed 7-day opaque tokens with revocation.
 - File uploads are link-based (Drive), so no object storage is required.
-- Exam endpoints do not exist yet; the schema and key isolation are in place.
-- Load capacity is **not** measured. Registered students ≠ concurrent users; see
-  `docs/DEPLOYMENT.md` for the test plan.
+- Instalments are a schedule attached to one invoice (`fee_installments`): payments post
+  against the invoice and pay the schedule down in order, so a part-payment cannot be
+  attributed to a specific instalment.
+- Notifications are in-app only (bell). No email/SMS/push delivery, so fee reminders are
+  copied from the Reminders tab and sent by the office through its own channel.
+- Reports are summary tables plus CSV; there is no scheduled report delivery.
+- Load capacity is **not** measured beyond the mixed-request benchmark in
+  `docs/DEPLOYMENT.md`. Registered students ≠ concurrent users.
 
 ## 9. Adding a Phase 2 module (conventions)
 

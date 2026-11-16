@@ -10,12 +10,19 @@ Authentication uses the `cp_session` HttpOnly cookie — there is no bearer toke
   { "error": { "code": "forbidden", "message": "…", "details": [{ "field": "email", "message": "…" }], "requestId": "…" } }
   ```
   `details` appears only for validation failures. 5xx messages are generic; the
-  `requestId` correlates with structured server logs.
+  `requestId` correlates with structured server logs. A 403 from a role guard uses
+  `"code": "role_forbidden"`; the web client treats it (and any 401) as a signal that the
+  session in the tab is stale, re-reads `/api/auth/me` and routes the user to their own
+  area or back to the sign-in screen. A 403 with `"code": "password_change_required"`
+  means the account still holds a temporary password: only `/api/auth/me`,
+  `/api/auth/change-password` and `/api/auth/logout` are reachable, and the web app sends
+  the user to `/change-password`.
 - **Status codes**: 400 validation, 401 unauthenticated, 403 wrong role/foreign origin,
   404 unknown route, 409 conflict/duplicate, 423 locked account, 429 rate limited,
   500 unexpected, 503 database unreachable.
 - **Caching**: authenticated GETs send `Cache-Control: no-store`.
-- **Rate limits**: 600 requests/min/IP overall; 10 login attempts/15 min/IP. Counters are
+- **Rate limits**: 600 requests/min/IP overall; 30 login attempts/15 min/IP (a shared
+  office IP must let the whole staff room sign in). Counters are
   in-memory (per API process).
 - **CSRF**: `POST/PUT/PATCH/DELETE /api/*` requests that carry an `Origin` or `Referer`
   must match the app origin (or a loopback dev origin). Server-to-server calls without
@@ -144,18 +151,40 @@ the web forms, so client and server rules cannot drift:
 - `createUserSchema`, `createCourseSchema`, `createSubjectSchema`, `createBatchSchema`
 - `studentImportRowSchema` (CSV import)
 
-## Planned endpoints (Phases 2–6)
+## Endpoints implemented in Phases 2–13
 
-```
-GET/POST/PATCH  /api/admin/students, /teachers, /courses, /subjects, /batches
-POST            /api/admin/students/import          (CSV, dedupe by email/enrolment)
-GET/POST        /api/admin/fees, /api/admin/payments (receipt numbers, dues)
-GET/POST        /api/teacher/batches/:id/lessons, /materials, /attendance
-POST            /api/exams/:id/attempts             (server-validated window + ownership)
-PATCH           /api/attempts/:id/responses/:qid     (autosave, ownership checked)
-POST            /api/attempts/:id/submit             (server-side scoring in a transaction)
-POST            /api/exams/:id/publish-results
-```
+All of these paginate with `?page=&pageSize=` (pageSize ≤ 100) and reject a foreign role
+with 403 before touching the query.
+
+| Area | Routes |
+| --- | --- |
+| Admin academics | `GET/POST/PATCH /api/admin/students`, `/teachers`, `/courses`, `/subjects`, `/batches`; `POST /students/import`, `GET /students/export` |
+| Enrolment & teaching | `POST /api/admin/batches/:id/students`, `POST /api/admin/batches/:id/teachers`, `GET /api/teacher/batches`, lessons, materials, attendance |
+| Exams | `GET/POST/PATCH/DELETE /api/admin/exams`, questions and options; `POST /exams/:id/publish-results`; teacher and student exam lists |
+| Attempts | `POST /api/student/exams/:id/attempts`, `PATCH /attempts/:id/answers`, `POST /attempts/:id/submit`, `GET /attempts/:id` |
+| Fees | `GET/POST /api/admin/fees/structures`; `GET /fees/dues`; `POST /fees/assign`; `POST /fees/:id/payments`; `GET /fees/payments` |
+| Instalment plan | Each invoice carries `installments` (`seq`, `amount`, `dueDate`, `paidAmount`, `status`) generated from the structure's instalment count; payments pay the schedule down in order |
+| Fee corrections | `POST /fees/payments/:id/void` (reason), `GET /fees/payments/:id/receipt`, `POST /fees/:id/waive`, `PATCH /fees/:id` (discount/due date), `GET /fees/reminders` |
+| Communication | `GET/POST/PATCH/DELETE /api/admin/announcements`; `GET/POST /api/teacher/announcements` (own batches only); `GET /api/me/notifications`, `/notifications/unread-count`, `POST /notifications/read-all`, `POST /notifications/:id/read` |
+| Staff accounts (super admin) | `GET/POST /api/admin/admins`, `PATCH /admins/:id`, `POST /admins/:id/password` |
+| Settings (super admin) | `GET/PATCH /api/admin/settings` — institute name, address, phone, email, receipt footer |
+| Audit trail (super admin) | `GET /api/admin/audit-logs?search=&action=&entityType=` |
+| Reports | `GET /api/admin/reports/overview`, `/reports/fees.csv`, `/reports/attendance.csv?from=&to=` |
+| Guardian portal (read-only) | `GET /api/guardian/children`; `GET /children/:id/attendance`, `/children/:id/fees`, `/children/:id/results` (published only). Every route checks `guardian_profiles.user_id = session user AND student_id = :id` in SQL and answers 404 for an unlinked child |
+| Guardian onboarding | `POST /api/admin/students/:id/guardian-access` `{ email, name? }` — creates a `guardian` account with a one-time temporary password and links it to the student's guardian contact row (409 if that email exists) |
+
+Exam-integrity rules enforced by the service layer:
+
+1. An exam cannot be published (via `PATCH`) until it has at least one question, and it
+   cannot be deleted once attempts exist — close it instead.
+2. An attempt whose window expired is expired and graded the next time the student lists
+   exams or starts one; unanswered attempts score zero instead of staying open.
+3. Re-evaluating a response after results were published clears the publication flags, so
+   a score can never change silently under a student.
+4. `exam_results` keeps the best attempt; an exam with zero total marks reports `pending`,
+   never `pass`.
+5. A voided receipt stops counting towards its invoice but stays on record with its reason;
+   payment recording locks the invoice row so concurrent collectors cannot overpay it.
 
 Non-negotiable rules for those routes:
 

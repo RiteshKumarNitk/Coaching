@@ -3,9 +3,10 @@
  *
  *   pnpm db:seed
  *
- * Creates one super admin, two admins, three teachers, eight students, two
- * courses, two batches, schedules, attendance, fees, payments, announcements,
- * lessons, assignments and a completed + an upcoming examination.
+ * Creates one super admin, two admins, three teachers, eight students, one
+ * guardian (read-only portal), two courses, two batches, schedules, attendance,
+ * fees, payments, announcements, lessons, assignments and a completed + an
+ * upcoming examination.
  * All accounts share the password printed at the end (or SEED_ADMIN_PASSWORD).
  */
 import path from "node:path";
@@ -207,6 +208,20 @@ try {
       studentIds.push({ ...student, id: userId, batchId: batches[batchKey] });
       admissionIndex += 1;
     }
+
+    // A guardian login for the first student (read-only portal).
+    const guardianUserId = await addUser(tx, {
+      email: "guardian.aarav@guardian.local",
+      fullName: "Rajesh Sharma",
+      phone: "9810099001",
+      role: "guardian",
+      password: devPassword
+    });
+    await tx.query(
+      `UPDATE guardian_profiles SET user_id = $2, email = $3
+       WHERE student_id = $1 AND is_primary`,
+      [studentIds[0].id, guardianUserId, "guardian.aarav@guardian.local"]
+    );
 
     // Attendance for the last 21 days (Sundays excluded), deterministic pattern.
     let dayIndex = 0;
@@ -442,6 +457,7 @@ try {
   console.log("  admin       : office@coaching.local");
   console.log("  teacher     : meera.iyer@coaching.local");
   console.log("  student     : aarav.sharma@student.local");
+  console.log("  guardian    : guardian.aarav@guardian.local (read-only portal)");
   console.log(`  password    : ${devPassword}`);
   console.log("[seed] Change or delete these accounts before any real deployment.");
 } catch (error) {

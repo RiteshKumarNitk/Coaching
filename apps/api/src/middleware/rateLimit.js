@@ -1,4 +1,5 @@
 import { tooManyRequests } from "../utils/AppError.js";
+import { env } from "../config/env.js";
 
 /**
  * Small in-memory fixed-window limiter.
@@ -37,15 +38,17 @@ export function createRateLimiter({ windowMs = 60_000, max = 300, keyFn, message
   };
 }
 
+// An institute office usually shares one public IP and several people sign in at
+// once, so the window allows a full staff room; it still stops credential stuffing.
 export const loginLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1000,
-  max: 10,
+  max: 30,
   keyFn: (req) => `login:${req.ip}`,
   message: "Too many sign-in attempts. Please wait 15 minutes and try again."
 });
 
 export const apiLimiter = createRateLimiter({
   windowMs: 60_000,
-  max: 600,
+  max: env.apiRateLimitMax,
   message: "Too many requests. Please slow down."
 });

@@ -46,6 +46,10 @@ export function createAdminController({ dashboards, students, teachers, academic
       res.json(await students.resetPassword(req.params.id, req.body.password, actorOf(req), req.ip));
     },
 
+    grantGuardianAccess: async (req, res) => {
+      res.status(201).json(await students.grantGuardianAccess(req.params.id, req.body, actorOf(req), req.ip));
+    },
+
     exportStudents: async (_req, res) => {
       const csv = await students.exportCsv();
       res.setHeader("Content-Type", "text/csv; charset=utf-8");

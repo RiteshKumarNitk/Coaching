@@ -5,7 +5,8 @@ const DEV_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"];
 
 /** Origins allowed to call the API with credentials. */
 export function allowedOrigins(req) {
-  const list = new Set(DEV_ORIGINS);
+  // The Vite dev origins must never widen production CORS.
+  const list = new Set(env.isProduction ? [] : DEV_ORIGINS);
   if (env.appOrigin) list.add(env.appOrigin);
   if (req?.get("host")) list.add(`${req.protocol}://${req.get("host")}`);
   return list;

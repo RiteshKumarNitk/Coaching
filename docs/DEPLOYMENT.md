@@ -96,19 +96,27 @@ is not the default.
    ```
 4. **Migrate** with a one-off job: `pnpm db:migrate`. Do **not** run the dev seed against
    the production branch.
-5. **Create the real super admin**:
+5. **Remove the demo data** (never run the dev seed against the production branch):
+   ```bash
+   pnpm db:clean -- --dry-run   # shows the tables and row counts
+   pnpm db:clean -- --yes       # truncates every demo table
+   ```
+   Role definitions and the migration history are kept; everything else (users, courses,
+   fees, exams, content, audit trail) is removed. Take the Neon snapshot first — this
+   cannot be undone.
+6. **Create the real super admin**:
    `pnpm create-admin -- --email owner@… --name "Owner"` — the script prints a one-time
-   password; sign in and change it.
-6. **Build and start**:
+   password; sign in and change it (the app forces a password change on first use).
+7. **Build and start**:
    ```bash
    pnpm install --frozen-lockfile
    pnpm build
    NODE_ENV=production pnpm --filter @coaching/api start
    ```
    The API serves `apps/web/dist`, including the manifest and service worker.
-7. **Verify** `GET /api/health` → `{"status":"ok"}`, then sign in with each role and
+8. **Verify** `GET /api/health` → `{"status":"ok"}`, then sign in with each role and
    confirm `/api/student/dashboard` returns 403 for an admin session.
-8. **HTTPS is mandatory** in production: the session cookie is `Secure`, and service
+9. **HTTPS is mandatory** in production: the session cookie is `Secure`, and service
    workers only register on secure origins.
 
 ## 3. Security checklist for go-live
@@ -117,9 +125,13 @@ is not the default.
 - [ ] `APP_ORIGIN` set to the exact public origin (no trailing slash) — CSRF checks use it.
 - [ ] `COOKIE_SECURE=true` and HTTPS terminated correctly (`TRUST_PROXY=true` if behind a
       reverse proxy, so `req.ip` is the client).
-- [ ] Dev seed accounts deleted or passwords rotated.
+- [ ] `pnpm db:clean -- --yes` run (after the snapshot) so no demo account or sample
+      fee/exam row survives go-live, and the real super admin created afterwards. It keeps
+      `roles` and `schema_migrations`; verify a post-wipe `pnpm create-admin` succeeds.
 - [ ] Neon manual snapshot taken before the first migration.
 - [ ] `pnpm test` and `pnpm lint` pass on the deployment commit.
+- [ ] `pnpm check:env` passes with the production environment loaded (it blocks on a
+      missing `APP_ORIGIN`, non-HTTPS origin, insecure cookies and missing build files).
 - [ ] Neon usage alerts configured (compute/egress) to avoid a surprise suspension.
 - [ ] Audit logs reviewed after the first week.
 
@@ -128,28 +140,74 @@ is not the default.
 Implemented: SQL aggregates, indexes, connection pooling, pagination primitives, PWA
 asset caching, vendor chunk splitting.
 
-**Not measured:** no load test has been run, because that requires a provisioned Neon
-branch and a load generator. Registered students (5,000) is not a capacity number.
+**Measured 2026-11-13** with `pnpm load:test` (dependency-free harness, read-only admin
+GETs). Laptop client → the Neon dev branch, one API process, default pool of 10.
 
-Load-test plan (k6 or autocannon), to be executed in Phase 7:
+Round trips per request used to be: admin dashboard 8 (eight pool connections), exam list
+2, fee dues 3. Each now returns its whole result set as one `json_build_object` row. Same
+machine, same data, back-to-back runs (old code on :4001, new code on :4002):
 
-| Scenario | Shape | What to watch |
-| --- | --- | --- |
-| 100 concurrent users | 10 rps for 5 min, 70% dashboard GETs | p95 < 500 ms, no 5xx |
-| 500 concurrent users | 50 rps for 5 min, mix of dashboards + login | p95 < 1 s, connection pool saturation |
-| 1,000 concurrent users | 100 rps for 5 min, plus 200 simultaneous exam autosaves | Neon CU autoscaling, pool waits, error rate |
+| Endpoint set | Concurrency | Before | After |
+| --- | --- | --- | --- |
+| `/api/admin/dashboard` only | 1 | 4.7 rps · p50 196 ms · p95 198 ms | 6.4 rps · p50 157 ms · p95 159 ms |
+| `/api/admin/dashboard` only | 10 | 12.3 rps · p50 780 ms · p95 960 ms | 54.3 rps · p50 180 ms · p95 214 ms |
+| dashboard + exams + dues | 10 | 20.7 rps · p50 452 ms · p95 685 ms | 55.3 rps · p50 159 ms · p95 220 ms |
 
-Expected bottlenecks and mitigations:
+No 5xx and no 429s in any run (the limiter was raised for the tests only). The mixed set
+went 20.7 → 37.7 rps from the dashboard change alone, then 37.7 → 55.3 rps once the two
+list endpoints were batched too.
 
-- **Neon Free compute** (0.25–2 CU) autoscales; a burst of 1,000 concurrent users will
-  queue. Cache dashboards briefly, keep queries indexed, and avoid per-request writes.
-- **Single API process** — add instances behind the host's proxy; sessions already live
-  in Postgres, so horizontal scaling works. Rate limiting then needs a shared store.
-- **Exam autosave** should upsert one row per answer with an attempt-ownership predicate;
-  never load the whole paper on each save.
-- **Egress (5 GB/month)** — JSON dashboards are small, but avoid returning full tables.
+What this says:
 
-Report real numbers after testing; do not infer capacity from user counts.
+- Dropping the per-request query fan-out is a concurrency win: **4.4× throughput and 4.5×
+  p95** on the dashboard at 10 concurrent users. At concurrency 1 the gain is only ~20%
+  because the old eight queries already ran in parallel — the win is not needing eight
+  pool connections per request.
+- All three measured endpoints are now one round trip. What is left is database execution
+  time and Neon round-trip latency per request (~150–180 ms here), not query count.
+- The p95 < 500 ms target at 10 concurrent is met for all three. A 100-concurrent run is
+  still untested; Neon Free compute and a single API process remain the ceiling.
+- Batched responses are JSON aggregates, so timestamps are normalised to ISO in the exam
+  mapper and `due_date` now arrives as a plain date (`2026-11-02`) instead of a UTC-shifted
+timestamp — the frontend `formatDate` renders both the same.
+
+Reproduce it:
+
+```bash
+cd apps/api && PORT=4001 API_RATE_LIMIT_MAX=100000 node src/server.js   # scratch instance
+pnpm load:test -- --base http://localhost:4001 --email admin@coaching.local --password admin123 \
+  --concurrency 10 --duration 15 --paths "/api/admin/dashboard,/api/admin/exams?page=1,/api/admin/fees/dues"
+```
+
+`API_RATE_LIMIT_MAX` (default 600 requests/minute per IP) has to be raised for a load
+test, otherwise the limiter answers 429 long before the app is stressed. Keep it at the
+default in production.
+
+Still unmeasured: exam autosave under concurrent attempts (the harness only sends GETs),
+login storms (the 10-per-15-minute login limiter is deliberately strict), and any
+multi-instance shape.
+
+Next steps: place the API in the same region as Neon (the remaining latency is per-request
+round-trip time), then run the 100-concurrent profile before quoting a capacity number to
+the institute.
+
+### Local production-shape check (no host required)
+
+```bash
+pnpm build
+NODE_ENV=production PORT=4003 APP_ORIGIN=http://localhost:4003 COOKIE_SECURE=false \
+  node apps/api/src/server.js
+```
+
+Verified on 2026-11-16 against that instance: `/` and deep links (`/admin/reports`,
+`/student/fees`) serve the SPA, hashed assets come back with
+`Cache-Control: public, max-age=31536000`, the manifest/service worker/offline page are
+served, CSP + nosniff + frame denial are set, HSTS appears because
+`NODE_ENV=production`, login + `/api/admin/dashboard`, `/api/admin/reports/overview`,
+`/api/admin/settings` and `/api/me/notifications/unread-count` work on one origin, both
+cross-role checks (admin→student, student→admin) return 403, and a foreign `Origin` on
+login returns 403. `COOKIE_SECURE=false` is only for this local HTTP check —
+`pnpm check:env` rejects it for a real deployment.
 
 ## 5. PWA / Android testing
 
@@ -162,6 +220,17 @@ Report real numbers after testing; do not infer capacity from user counts.
    app's network error state (expected).
 5. Test on a small screen (360×640) and with the keyboard open — the login form and the
    bottom navigation must stay usable.
+
+Verified on 2026-11-16 in desktop Chromium against the production build: manifest parses
+(`Coaching Institute`, short name `Coaching`, `display: standalone`, `start_url: /`,
+theme `#16204a`), all three icons decode at their declared sizes (192×192, 512×512 and a
+512×512 maskable), the service worker is active and controlling `/` with caches
+`coaching-shell-v1` / `coaching-assets-v1` holding `/`, `/index.html`, `/offline.html`,
+the manifest, both icons and `/student`, and the student app at 360×640 has no horizontal
+overflow with a 68 px six-item bottom navigation.
+
+Not verified without a device: the install prompt itself, standalone launch, airplane-mode
+behaviour after a real install, and the on-screen keyboard state.
 
 A PWA is installable but is **not** a Play Store application. A Capacitor shell can reuse
 this exact build later.

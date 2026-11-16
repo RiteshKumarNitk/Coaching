@@ -11,7 +11,7 @@ const DUMMY_HASH = hashPassword("not-a-real-password-000");
 
 const USER_WITH_ROLES = `
   SELECT u.id, u.email, u.full_name, u.phone, u.status, u.last_login_at, u.password_hash,
-         u.failed_login_attempts, u.locked_until,
+         u.must_change_password, u.failed_login_attempts, u.locked_until,
          COALESCE(array_agg(ur.role_code) FILTER (WHERE ur.role_code IS NOT NULL), '{}') AS roles
   FROM users u
   LEFT JOIN user_roles ur ON ur.user_id = u.id
@@ -36,6 +36,7 @@ export function publicUser(row) {
     status: row.status,
     roles: row.roles,
     permissions: permissionsFor(row.roles),
+    mustChangePassword: Boolean(row.must_change_password),
     lastLoginAt: row.last_login_at
   };
 }
@@ -159,7 +160,7 @@ export function createAuthService(db, audit) {
       const tokenHash = hashSessionToken(token);
       const row = await db.one(
         `SELECT s.id AS session_id, s.expires_at, s.last_seen_at,
-                u.id, u.email, u.full_name, u.phone, u.status, u.last_login_at,
+                u.id, u.email, u.full_name, u.phone, u.status, u.last_login_at, u.must_change_password,
                 COALESCE(array_agg(ur.role_code) FILTER (WHERE ur.role_code IS NOT NULL), '{}') AS roles
          FROM sessions s
          JOIN users u ON u.id = s.user_id
@@ -204,10 +205,11 @@ export function createAuthService(db, audit) {
       }
       const newHash = hashPassword(newPassword);
       await db.transaction(async (tx) => {
-        await tx.query("UPDATE users SET password_hash = $2, password_changed_at = now() WHERE id = $1", [
-          userId,
-          newHash
-        ]);
+        await tx.query(
+          `UPDATE users SET password_hash = $2, password_changed_at = now(), must_change_password = false
+           WHERE id = $1`,
+          [userId, newHash]
+        );
         // Revoke every other session for this account.
         await tx.query(
           `UPDATE sessions SET revoked_at = now()

@@ -153,6 +153,30 @@ describe("phase 3 teacher workspace", () => {
     state.adminCookie = cookieFrom(admin);
   });
 
+  it("posts notices only to the teacher's own batch", async () => {
+    const created = await request("/api/teacher/announcements", {
+      method: "POST",
+      cookie: state.teacherCookie,
+      body: { title: "Physics test moved", body: "The Physics test moves to Friday.", batchId: state.batchId }
+    });
+    assert.equal(created.status, 201, created.text);
+    assert.equal(created.json.audience, "batch");
+
+    const list = await request("/api/teacher/announcements", { cookie: state.teacherCookie });
+    assert.equal(list.status, 200);
+    assert.ok(list.json.items.some((item) => item.id === created.json.id));
+
+    const foreignBatch = await request("/api/teacher/announcements", {
+      method: "POST",
+      cookie: state.otherTeacherCookie,
+      body: { title: "Not mine", body: "Should be refused.", batchId: state.batchId }
+    });
+    assert.equal(foreignBatch.status, 404);
+
+    const asStudent = await request("/api/teacher/announcements", { cookie: state.studentCookie });
+    assert.equal(asStudent.status, 403);
+  });
+
   it("scopes batches to the signed-in teacher", async () => {
     const mine = await request("/api/teacher/batches", { cookie: state.teacherCookie });
     assert.equal(mine.status, 200);

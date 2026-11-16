@@ -12,8 +12,8 @@ export class AppError extends Error {
 export const badRequest = (message, details) => new AppError(400, message, { code: "bad_request", details });
 export const unauthorized = (message = "Authentication required") =>
   new AppError(401, message, { code: "unauthorized" });
-export const forbidden = (message = "You do not have access to this resource") =>
-  new AppError(403, message, { code: "forbidden" });
+export const forbidden = (message = "You do not have access to this resource", code = "forbidden") =>
+  new AppError(403, message, { code });
 export const notFound = (message = "Resource not found") => new AppError(404, message, { code: "not_found" });
 export const conflict = (message) => new AppError(409, message, { code: "conflict" });
 export const tooManyRequests = (message = "Too many requests. Try again later.") =>

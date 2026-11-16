@@ -20,8 +20,17 @@ export function createAuthMiddleware({ auth }) {
     return next();
   });
 
+  // A temporary password may only be used to set a real one.
+  const PASSWORD_CHANGE_ONLY = ["/api/auth/me", "/api/auth/change-password", "/api/auth/logout"];
+
   const requireAuth = (req, _res, next) => {
     if (!req.user) return next(unauthorized());
+    if (req.user.mustChangePassword) {
+      const path = req.originalUrl.split("?")[0];
+      if (!PASSWORD_CHANGE_ONLY.includes(path)) {
+        return next(forbidden("Set a new password before continuing", "password_change_required"));
+      }
+    }
     return next();
   };
 
@@ -30,7 +39,9 @@ export function createAuthMiddleware({ auth }) {
     (req, _res, next) => {
       if (!req.user) return next(unauthorized());
       const allowed = req.user.roles.some((role) => roles.includes(role));
-      if (!allowed) return next(forbidden("Your role does not have access to this area"));
+      // Distinct code: the browser uses it to re-check the session, since the role in
+      // the tab may be stale (role changed, or a different account signed in elsewhere).
+      if (!allowed) return next(forbidden("Your role does not have access to this area", "role_forbidden"));
       return next();
     };
 

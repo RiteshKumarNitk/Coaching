@@ -130,8 +130,9 @@ export function createTeachersService(db, audit) {
       if (duplicate) throw conflict("A user with this email or employee code already exists");
 
       const { rows } = await tx.query(
-        `INSERT INTO users (email, password_hash, full_name, phone, created_by) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-        [payload.email, hashPassword(password), payload.fullName, nullIfEmpty(payload.phone), actor.id]
+        `INSERT INTO users (email, password_hash, full_name, phone, created_by, must_change_password)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+        [payload.email, hashPassword(password), payload.fullName, nullIfEmpty(payload.phone), actor.id, !payload.password]
       );
       const userId = rows[0].id;
       await tx.query("INSERT INTO user_roles (user_id, role_code, granted_by) VALUES ($1, 'teacher', $2)", [userId, actor.id]);
@@ -302,7 +303,7 @@ export function createTeachersService(db, audit) {
 
     await db.transaction(async (tx) => {
       await tx.query(
-        `UPDATE users SET password_hash = $2, password_changed_at = now(),
+        `UPDATE users SET password_hash = $2, password_changed_at = now(), must_change_password = true,
                 failed_login_attempts = 0, locked_until = NULL, updated_at = now()
          WHERE id = $1`,
         [id, hashPassword(nextPassword)]

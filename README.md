@@ -4,10 +4,10 @@ A zero-monthly-cost coaching management system for a single institute: a mobile-
 student app (installable PWA), a teacher workspace and an administration dashboard,
 backed by an Express REST API and PostgreSQL (Neon in production).
 
-**Current status: Phase 1 (foundation) is implemented and verified.** Administration,
-teacher content tools, the full student app and the examination engine are scheduled
-in Phases 2–7 — see [Roadmap](#roadmap). Nothing in the UI is a mockup: every number
-and list on the dashboards is read from PostgreSQL for the signed-in user.
+**Current status: Phases 1–6 are implemented and verified.** Administration, the teacher
+workspace, the student app, examinations and fees are built; only hardening and deployment
+(Phase 7) remain — see [Roadmap](#roadmap). Nothing in the UI is a mockup: every number
+and list is read from PostgreSQL for the signed-in user.
 
 ---
 
@@ -28,11 +28,13 @@ and list on the dashboards is read from PostgreSQL for the signed-in user.
 | Profile + password change (revokes other sessions) | ✅ |
 | PWA: manifest, icons, service worker, offline page | ✅ |
 | Admin/teacher/student CLI + CSV import/export scripts | ✅ |
+| Examinations: question bank, timed attempts, autosave, evaluation, results publishing (admin + teacher workspaces) | ✅ |
+| Fees: structures, dues, offline payments with receipts, student ledger | ✅ |
+| Go-live checks: `pnpm check:env` preflight and `pnpm load:test` load harness | ✅ |
 | API integration tests (auth, RBAC, CSRF, dashboards) | ✅ |
 
-Not built yet (planned): student/teacher CRUD screens, attendance marking UI, lecture
-player, exam attempt engine, fee receipts, announcements composer. The backend already
-has the tables and constraints for them.
+Not built yet (planned): hosted deployment and on-device Android install testing.
+Email/SMS delivery is deliberately absent — notifications are in-app only.
 
 ---
 
@@ -75,10 +77,12 @@ Express API over HTTPS, and only through the HttpOnly session cookie.
 | `pnpm start` | Starts the API, which also serves the built PWA |
 | `pnpm lint` | ESLint across the workspace |
 | `pnpm test` | API integration tests (node:test) |
+| `pnpm smoke:ui` | Browser smoke test (real Chrome/Edge, built SPA, temp database): login, role scoping, admin dashboard. Run `pnpm build` first |
 | `pnpm db:migrate` | Applies pending SQL migrations |
 | `pnpm db:seed` | Development-only sample institute data |
 | `pnpm check:db` | Connection, migration and row-count report |
 | `pnpm create-admin -- --email … --name …` | Safely creates/promotes a super admin |
+| `pnpm db:clean -- --dry-run` / `-- --yes` | Pre-launch wipe of demo rows (keeps roles + migrations) |
 | `pnpm import-students -- students.csv` | Bulk student import with dedupe + credentials file |
 | `pnpm export-database` | NDJSON logical backup (no password hashes) |
 | `pnpm icons` | Regenerates the PWA icon set |
@@ -118,7 +122,7 @@ docs/             ARCHITECTURE, DATABASE, API, DEPLOYMENT
   a header or a client-side store. A student id is always taken from the session.
 - Zod validates every accepted payload; SQL uses bound parameters only.
 - CSRF: origin/referer verification on state-changing API requests plus SameSite cookies.
-- Login rate limiting (10 attempts / 15 min / IP) and per-account lockout after 8 failures.
+- Login rate limiting (30 attempts / 15 min / IP — sized for a shared office IP) and per-account lockout after 8 failures.
 - Security headers incl. CSP, `X-Frame-Options: DENY`, `nosniff`, HSTS in production.
 - Audit trail for sign-in, sign-out, password changes, admin creation and imports.
 - Answer keys live in `exam_answer_keys`, separate from question/option tables, so they
@@ -148,6 +152,6 @@ is not sized for 1,000 concurrent exam takers.
 - **Phase 2 (done):** admin management — students, teachers, courses, subjects, batches, enrolment, CSV.
 - **Phase 3 (done):** teacher workspace — batches, lectures, materials, assignments, submission evaluation, attendance marking.
 - **Phase 4 (done):** student app — courses, lecture player with progress, notes, assignments + submissions, attendance history, announcements.
-- **Phase 5:** examinations — question bank, secure attempts, autosave, evaluation, results.
-- **Phase 6:** fees — structures, receipts, dues reports, performance reports.
-- **Phase 7:** hardening, load tests, deployment, Android install testing.
+- **Phase 5 (done):** examinations — question bank, secure timed attempts with autosave, MCQ auto-grading, subjective evaluation, results publishing; teachers manage exams for their own batches from `/teacher/exams`.
+- **Phase 6 (done):** fees — structures, assignment, offline payments with receipts, dues report, student ledger.
+- **Phase 7 (in progress):** hardening and the preflight/load-test tooling are done; hosting and Android install testing are still to do — see `docs/DEPLOYMENT.md`.

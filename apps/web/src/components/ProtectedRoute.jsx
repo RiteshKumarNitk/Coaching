@@ -10,6 +10,11 @@ export function ProtectedRoute({ roles }) {
   if (isLoading) return <FullPageLoader label="Checking your session" />;
   if (!user) return <Navigate to="/login" replace state={{ from: location.pathname }} />;
 
+  // Temporary password: nothing else is reachable until it is replaced.
+  if (user.mustChangePassword && location.pathname !== "/change-password") {
+    return <Navigate to="/change-password" replace />;
+  }
+
   if (roles && roles.length > 0 && !roles.some((role) => user.roles.includes(role))) {
     // Never render another role's area; send the user to their own home.
     return <Navigate to={homeRouteForRoles(user.roles)} replace />;

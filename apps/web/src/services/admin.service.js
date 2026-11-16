@@ -20,6 +20,7 @@ export const adminService = {
   enrollStudent: (id, batchId) => api.post(`/api/admin/students/${id}/enrollment`, { batchId }),
   unenrollStudent: (id, enrollmentId) => api.del(`/api/admin/students/${id}/enrollment/${enrollmentId}`),
   resetStudentPassword: (id) => api.post(`/api/admin/students/${id}/reset-password`, {}),
+  grantGuardianAccess: (id, payload) => api.post(`/api/admin/students/${id}/guardian-access`, payload),
   importStudents: (csv) => api.post("/api/admin/students/import", { csv }),
 
   async downloadStudentsCsv() {

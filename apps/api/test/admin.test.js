@@ -91,6 +91,7 @@ before(async () => {
   }
 
   await createUser({ email: "admin@test.local", password: "AdminPass123", role: "admin", fullName: "Admin" });
+  await createUser({ email: "owner@test.local", password: "OwnerPass123", role: "super_admin", fullName: "Owner" });
   await createUser({ email: "teacher@test.local", password: "TeacherPass123", role: "teacher", fullName: "Teacher" });
   await createUser({ email: "student@test.local", password: "StudentPass123", role: "student", fullName: "Student" });
 
@@ -263,7 +264,21 @@ describe("phase 2 admin management", () => {
 
     const loginAsStudent = await login("riya.test@test.local", state.newStudentPassword);
     assert.equal(loginAsStudent.status, 200);
+    assert.equal(loginAsStudent.json.user.mustChangePassword, true);
     state.newStudentCookie = cookieFrom(loginAsStudent);
+
+    // The generated password must be replaced before the student app opens.
+    const blockedDashboard = await request("/api/student/dashboard", { cookie: state.newStudentCookie });
+    assert.equal(blockedDashboard.status, 403);
+    assert.equal(blockedDashboard.json.error.code, "password_change_required");
+
+    const chosen = await request("/api/auth/change-password", {
+      method: "POST",
+      cookie: state.newStudentCookie,
+      body: { currentPassword: state.newStudentPassword, newPassword: "RiyaChosen123" }
+    });
+    assert.equal(chosen.status, 200, chosen.text);
+    state.newStudentPassword = "RiyaChosen123";
 
     const dashboard = await request("/api/student/dashboard", { cookie: state.newStudentCookie });
     assert.equal(dashboard.status, 200);
@@ -336,6 +351,7 @@ describe("phase 2 admin management", () => {
 
     const newLogin = await login("riya.test@test.local", reset.json.temporaryPassword);
     assert.equal(newLogin.status, 200);
+    assert.equal(newLogin.json.user.mustChangePassword, true);
   });
 
   it("resets a teacher password and controls teacher status", async () => {
@@ -351,8 +367,20 @@ describe("phase 2 admin management", () => {
     assert.equal(teacherLogin.status, 200);
     const teacherCookie = cookieFrom(teacherLogin);
 
+    // The temporary password only unlocks the change-password screen.
     const before = await request("/api/teacher/dashboard", { cookie: teacherCookie });
-    assert.equal(before.status, 200);
+    assert.equal(before.status, 403);
+    assert.equal(before.json.error.code, "password_change_required");
+
+    const changed = await request("/api/auth/change-password", {
+      method: "POST",
+      cookie: teacherCookie,
+      body: { currentPassword: reset.json.temporaryPassword, newPassword: "TeacherPass456" }
+    });
+    assert.equal(changed.status, 200, changed.text);
+
+    const afterChange = await request("/api/teacher/dashboard", { cookie: teacherCookie });
+    assert.equal(afterChange.status, 200);
 
     const deactivated = await request(`/api/admin/teachers/${state.teacherId}/status`, {
       method: "POST",
@@ -375,8 +403,9 @@ describe("phase 2 admin management", () => {
     });
     assert.equal(reactivated.status, 200);
 
-    const relogin = await login("new.teacher@test.local", reset.json.temporaryPassword);
+    const relogin = await login("new.teacher@test.local", "TeacherPass456");
     assert.equal(relogin.status, 200);
+    assert.equal(relogin.json.user.mustChangePassword, false);
 
     const teacherCannotReset = await request(`/api/admin/teachers/${state.teacherId}/status`, {
       method: "POST",
@@ -404,5 +433,141 @@ describe("phase 2 admin management", () => {
       body: { fullName: "Duplicate Student", email: "riya.test@test.local", enrollmentNo: "ENR-TEST-999" }
     });
     assert.equal(duplicate.status, 409);
+  });
+
+  it("publishes an announcement and notifies the audience", async () => {
+    const created = await request("/api/admin/announcements", {
+      method: "POST",
+      cookie: state.adminCookie,
+      body: {
+        title: "Holiday notice",
+        body: "The institute is closed on Monday for maintenance.",
+        audience: "all",
+        isPinned: true
+      }
+    });
+    assert.equal(created.status, 201, created.text);
+
+    const list = await request("/api/admin/announcements", { cookie: state.adminCookie });
+    assert.equal(list.status, 200);
+    assert.ok(list.json.items.some((item) => item.id === created.json.id));
+    assert.equal(list.json.items[0].isPinned, true);
+
+    const feed = await request("/api/student/announcements", { cookie: state.studentCookie });
+    assert.ok(feed.json.items.some((item) => item.title === "Holiday notice"));
+
+    const unread = await request("/api/me/notifications/unread-count", { cookie: state.studentCookie });
+    assert.ok(unread.json.count >= 1);
+
+    const inbox = await request("/api/me/notifications", { cookie: state.studentCookie });
+    assert.ok(inbox.json.items.some((item) => item.title.includes("Holiday notice")));
+
+    const first = inbox.json.items[0];
+    const read = await request(`/api/me/notifications/${first.id}/read`, {
+      method: "POST",
+      cookie: state.studentCookie
+    });
+    assert.equal(read.status, 200);
+
+    const readAll = await request("/api/me/notifications/read-all", {
+      method: "POST",
+      cookie: state.studentCookie
+    });
+    assert.equal(readAll.status, 200);
+    const after = await request("/api/me/notifications/unread-count", { cookie: state.studentCookie });
+    assert.equal(after.json.count, 0);
+
+    const denied = await request("/api/admin/announcements", {
+      method: "POST",
+      cookie: state.studentCookie,
+      body: { title: "Nope", body: "Students cannot publish notices", audience: "all" }
+    });
+    assert.equal(denied.status, 403);
+
+    const missingTarget = await request("/api/admin/announcements", {
+      method: "POST",
+      cookie: state.adminCookie,
+      body: { title: "Batch notice", body: "Missing the batch", audience: "batch" }
+    });
+    assert.equal(missingTarget.status, 400);
+
+    const removed = await request(`/api/admin/announcements/${created.json.id}`, {
+      method: "DELETE",
+      cookie: state.adminCookie
+    });
+    assert.equal(removed.status, 200);
+  });
+
+  it("manages staff accounts, settings, the audit trail and reports", async () => {
+    const owner = await login("owner@test.local", "OwnerPass123");
+    assert.equal(owner.status, 200, owner.text);
+    const ownerCookie = cookieFrom(owner);
+
+    // A plain admin cannot manage staff or settings.
+    const adminDenied = await request("/api/admin/admins", { cookie: state.adminCookie });
+    assert.equal(adminDenied.status, 403);
+
+    const before = await request("/api/admin/settings", { cookie: ownerCookie });
+    assert.equal(before.status, 200, before.text);
+    assert.equal(before.json.instituteName, "Coaching Institute");
+
+    const changed = await request("/api/admin/settings", {
+      method: "PATCH",
+      cookie: ownerCookie,
+      body: { instituteName: "Test Academy", receiptFooter: "Thank you" }
+    });
+    assert.equal(changed.status, 200, changed.text);
+    assert.equal(changed.json.instituteName, "Test Academy");
+
+    const created = await request("/api/admin/admins", {
+      method: "POST",
+      cookie: ownerCookie,
+      body: { fullName: "Ops Admin", email: "ops@test.local", password: "OpsPass123", roleCode: "admin" }
+    });
+    assert.equal(created.status, 201, created.text);
+
+    const duplicate = await request("/api/admin/admins", {
+      method: "POST",
+      cookie: ownerCookie,
+      body: { fullName: "Ops Admin 2", email: "ops@test.local", roleCode: "admin" }
+    });
+    assert.equal(duplicate.status, 409);
+
+    const opsLogin = await login("ops@test.local", "OpsPass123");
+    assert.equal(opsLogin.status, 200, opsLogin.text);
+    const opsCookie = cookieFrom(opsLogin);
+    const opsStaff = await request("/api/admin/admins", { cookie: opsCookie });
+    assert.equal(opsStaff.status, 403);
+    const opsStudents = await request("/api/admin/students", { cookie: opsCookie });
+    assert.equal(opsStudents.status, 200);
+
+    const deactivated = await request(`/api/admin/admins/${created.json.id}`, {
+      method: "PATCH",
+      cookie: ownerCookie,
+      body: { status: "inactive" }
+    });
+    assert.equal(deactivated.status, 200, deactivated.text);
+    assert.equal(deactivated.json.status, "inactive");
+
+    const revoked = await request("/api/admin/students", { cookie: opsCookie });
+    assert.equal(revoked.status, 401);
+
+    const audit = await request("/api/admin/audit-logs?action=settings.updated", { cookie: ownerCookie });
+    assert.equal(audit.status, 200);
+    assert.ok(audit.json.items.length >= 1);
+    assert.equal(audit.json.items[0].action, "settings.updated");
+
+    const reports = await request("/api/admin/reports/overview", { cookie: state.adminCookie });
+    assert.equal(reports.status, 200, reports.text);
+    assert.equal(typeof reports.json.totals.students, "number");
+    assert.ok(Array.isArray(reports.json.feesByMonth));
+
+    const feesCsv = await request("/api/admin/reports/fees.csv", { cookie: state.adminCookie });
+    assert.equal(feesCsv.status, 200);
+    assert.match(feesCsv.text.split("\n")[0], /^Student,Email,Enrolment/);
+
+    const attendanceCsv = await request("/api/admin/reports/attendance.csv", { cookie: state.adminCookie });
+    assert.equal(attendanceCsv.status, 200);
+    assert.match(attendanceCsv.text.split("\n")[0], /^Student,Enrolment,Batch/);
   });
 });

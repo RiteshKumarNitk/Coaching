@@ -3,6 +3,7 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-do
 import { LogOut, Menu, ShieldCheck, UserRound, X } from "lucide-react";
 import { initials } from "../utils/format.js";
 import { useAuth } from "../hooks/useAuth.js";
+import { NotificationBell } from "../components/NotificationBell.jsx";
 
 export function AppLayout({ items, roleLabel, productLabel = "Coaching Institute", profilePath }) {
   const { user, logout } = useAuth();
@@ -110,6 +111,7 @@ export function AppLayout({ items, roleLabel, productLabel = "Coaching Institute
             {roleLabel} · {user?.roles?.length ? "Verified session" : "Signed in"}
           </span>
           <div className="topbar__right">
+            <NotificationBell />
             <span className="badge badge--brand">{roleLabel}</span>
           </div>
         </header>

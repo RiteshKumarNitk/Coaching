@@ -6,6 +6,7 @@ import { FullPageLoader } from "../components/Skeleton.jsx";
 import { AdminLayout } from "../layouts/AdminLayout.jsx";
 import { TeacherLayout } from "../layouts/TeacherLayout.jsx";
 import { StudentLayout } from "../layouts/StudentLayout.jsx";
+import { GuardianLayout } from "../layouts/GuardianLayout.jsx";
 import { LoginPage } from "../pages/auth/LoginPage.jsx";
 import { AdminDashboard } from "../pages/admin/AdminDashboard.jsx";
 import { StudentsPage } from "../pages/admin/StudentsPage.jsx";
@@ -15,6 +16,10 @@ import { CoursesPage } from "../pages/admin/CoursesPage.jsx";
 import { SubjectsPage } from "../pages/admin/SubjectsPage.jsx";
 import { BatchesPage } from "../pages/admin/BatchesPage.jsx";
 import { BatchDetailPage } from "../pages/admin/BatchDetailPage.jsx";
+import { ExamsPage } from "../pages/admin/ExamsPage.jsx";
+import { ExamDetailPage } from "../pages/admin/ExamDetailPage.jsx";
+import { FeesPage } from "../pages/admin/FeesPage.jsx";
+import { teacherExamService } from "../services/exams.service.js";
 import { TeacherDashboard } from "../pages/teacher/TeacherDashboard.jsx";
 import { TeacherBatchesPage } from "../pages/teacher/TeacherBatchesPage.jsx";
 import { TeacherBatchPage } from "../pages/teacher/TeacherBatchPage.jsx";
@@ -22,6 +27,7 @@ import { TeacherAttendancePage } from "../pages/teacher/TeacherAttendancePage.js
 import { TeacherLessonsPage } from "../pages/teacher/TeacherLessonsPage.jsx";
 import { TeacherMaterialsPage } from "../pages/teacher/TeacherMaterialsPage.jsx";
 import { TeacherAssignmentsPage } from "../pages/teacher/TeacherAssignmentsPage.jsx";
+import { TeacherExamsPage } from "../pages/teacher/TeacherExamsPage.jsx";
 import { StudentDashboard } from "../pages/student/StudentDashboard.jsx";
 import { StudentCoursesPage } from "../pages/student/StudentCoursesPage.jsx";
 import { StudentLecturesPage } from "../pages/student/StudentLecturesPage.jsx";
@@ -30,7 +36,18 @@ import { StudentMaterialsPage } from "../pages/student/StudentMaterialsPage.jsx"
 import { StudentAssignmentsPage } from "../pages/student/StudentAssignmentsPage.jsx";
 import { StudentAttendancePage } from "../pages/student/StudentAttendancePage.jsx";
 import { StudentAnnouncementsPage } from "../pages/student/StudentAnnouncementsPage.jsx";
+import { StudentExamsPage } from "../pages/student/StudentExamsPage.jsx";
+import { StudentExamAttemptPage } from "../pages/student/StudentExamAttemptPage.jsx";
+import { StudentFeesPage } from "../pages/student/StudentFeesPage.jsx";
+import { AnnouncementsPage } from "../pages/admin/AnnouncementsPage.jsx";
+import { AdminTeamPage } from "../pages/admin/AdminTeamPage.jsx";
+import { AdminSettingsPage } from "../pages/admin/AdminSettingsPage.jsx";
+import { AdminAuditPage } from "../pages/admin/AdminAuditPage.jsx";
+import { AdminReportsPage } from "../pages/admin/AdminReportsPage.jsx";
+import { TeacherNoticesPage } from "../pages/teacher/TeacherNoticesPage.jsx";
+import { ChangePasswordPage } from "../pages/ChangePasswordPage.jsx";
 import { ProfilePage } from "../pages/ProfilePage.jsx";
+import { GuardianPage } from "../pages/guardian/GuardianPage.jsx";
 import { NotFoundPage } from "../pages/NotFoundPage.jsx";
 
 function HomeRedirect() {
@@ -47,6 +64,10 @@ export function AppRoutes() {
         <Route path="/login" element={<LoginPage />} />
       </Route>
 
+      <Route element={<ProtectedRoute />}>
+        <Route path="/change-password" element={<ChangePasswordPage />} />
+      </Route>
+
       <Route element={<ProtectedRoute roles={ADMIN_ROLES} />}>
         <Route path="/admin" element={<AdminLayout />}>
           <Route index element={<AdminDashboard />} />
@@ -57,6 +78,14 @@ export function AppRoutes() {
           <Route path="subjects" element={<SubjectsPage />} />
           <Route path="batches" element={<BatchesPage />} />
           <Route path="batches/:id" element={<BatchDetailPage />} />
+          <Route path="exams" element={<ExamsPage />} />
+          <Route path="exams/:id" element={<ExamDetailPage />} />
+          <Route path="fees" element={<FeesPage />} />
+          <Route path="notices" element={<AnnouncementsPage />} />
+          <Route path="reports" element={<AdminReportsPage />} />
+          <Route path="team" element={<AdminTeamPage />} />
+          <Route path="audit" element={<AdminAuditPage />} />
+          <Route path="settings" element={<AdminSettingsPage />} />
           <Route path="profile" element={<ProfilePage />} />
         </Route>
       </Route>
@@ -70,6 +99,12 @@ export function AppRoutes() {
           <Route path="lectures" element={<TeacherLessonsPage />} />
           <Route path="materials" element={<TeacherMaterialsPage />} />
           <Route path="assignments" element={<TeacherAssignmentsPage />} />
+          <Route path="exams" element={<TeacherExamsPage />} />
+          <Route path="notices" element={<TeacherNoticesPage />} />
+          <Route
+            path="exams/:id"
+            element={<ExamDetailPage service={teacherExamService} scope="teacher" basePath="/teacher" />}
+          />
           <Route path="profile" element={<ProfilePage />} />
         </Route>
       </Route>
@@ -84,7 +119,16 @@ export function AppRoutes() {
           <Route path="assignments" element={<StudentAssignmentsPage />} />
           <Route path="attendance" element={<StudentAttendancePage />} />
           <Route path="announcements" element={<StudentAnnouncementsPage />} />
+          <Route path="exams" element={<StudentExamsPage />} />
+          <Route path="attempts/:id" element={<StudentExamAttemptPage />} />
+          <Route path="fees" element={<StudentFeesPage />} />
           <Route path="profile" element={<ProfilePage />} />
+        </Route>
+      </Route>
+
+      <Route element={<ProtectedRoute roles={[ROLES.GUARDIAN]} />}>
+        <Route path="/guardian" element={<GuardianLayout />}>
+          <Route index element={<GuardianPage />} />
         </Route>
       </Route>
 

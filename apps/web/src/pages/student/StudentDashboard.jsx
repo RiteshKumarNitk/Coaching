@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import {
   BookOpen,
   CalendarDays,
@@ -176,7 +177,15 @@ export function StudentDashboard() {
           </div>
         </SectionCard>
 
-        <SectionCard title="Fees" subtitle={`${fees.openInvoices} open invoice(s)`}>
+        <SectionCard
+          title="Fees"
+          subtitle={`${fees.openInvoices} open invoice(s)`}
+          action={
+            <Link className="btn btn--ghost btn--sm" to="/student/fees">
+              Details
+            </Link>
+          }
+        >
           <div className="metric-block">
             <div className="stat-line">
               <span className="muted small">Paid</span>
@@ -204,7 +213,15 @@ export function StudentDashboard() {
       </div>
 
       <div className="grid-2">
-        <SectionCard title="Upcoming tests" subtitle="Scheduled for your batch">
+        <SectionCard
+          title="Upcoming tests"
+          subtitle="Scheduled for your batch"
+          action={
+            <Link className="btn btn--ghost btn--sm" to="/student/exams">
+              All tests
+            </Link>
+          }
+        >
           {upcomingExams.length === 0 ? (
             <EmptyState icon={ClipboardList} title="No tests scheduled" description="New tests appear here with their timing." />
           ) : (
@@ -250,7 +267,15 @@ export function StudentDashboard() {
         </SectionCard>
       </div>
 
-      <SectionCard title="Notice board" subtitle="Announcements for you and your batch">
+      <SectionCard
+        title="Notice board"
+        subtitle="Announcements for you and your batch"
+        action={
+          <Link className="btn btn--ghost btn--sm" to="/student/announcements">
+            All notices
+          </Link>
+        }
+      >
         {announcements.length === 0 ? (
           <EmptyState icon={Megaphone} title="No announcements" description="Notices from the institute will show up here." />
         ) : (

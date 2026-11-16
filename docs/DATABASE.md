@@ -64,7 +64,6 @@ erDiagram
 | `user_roles` | Many-to-many roles | PK `(user_id, role_code)` |
 | `sessions` | Server-side sessions | unique `token_hash`; partial index on active sessions |
 | `audit_logs` | Append-only admin/auth trail | `actor_email` snapshot survives user deletion |
-| `system_settings` | Key/value JSON settings | PK `key` |
 
 ### Academics
 

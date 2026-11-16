@@ -111,6 +111,22 @@ describe("authentication", () => {
     assert.equal(res.json.status, "ok");
   });
 
+  it("reports a degraded health check when the database is unreachable", async () => {
+    const down = async () => {
+      throw new Error("database down");
+    };
+    const brokenServer = createApp({ query: down, one: down, many: down }).listen(0, "127.0.0.1");
+    try {
+      await new Promise((resolve) => brokenServer.once("listening", resolve));
+      const res = await fetch(`http://127.0.0.1:${brokenServer.address().port}/api/health`);
+      assert.equal(res.status, 503);
+      assert.deepEqual(await res.json(), { status: "degraded", database: "unreachable" });
+    } finally {
+      brokenServer.closeAllConnections?.();
+      await new Promise((resolve) => brokenServer.close(resolve));
+    }
+  });
+
   it("rejects unauthenticated access to protected endpoints", async () => {
     const res = await request("/api/auth/me");
     assert.equal(res.status, 401);
@@ -159,7 +175,7 @@ describe("authentication", () => {
 
     const forbidden = await request("/api/admin/dashboard", { cookie });
     assert.equal(forbidden.status, 403);
-    assert.equal(forbidden.json.error.code, "forbidden");
+    assert.equal(forbidden.json.error.code, "role_forbidden");
 
     const cookieHeader = own.headers.get("set-cookie");
     assert.equal(cookieHeader, null, "dashboard responses must not set cookies");

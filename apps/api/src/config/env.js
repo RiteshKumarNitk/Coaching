@@ -30,7 +30,9 @@ export const env = Object.freeze({
   webDist: process.env.WEB_DIST_DIR
     ? path.resolve(repoRoot, process.env.WEB_DIST_DIR)
     : path.join(repoRoot, "apps", "web", "dist"),
-  logLevel: process.env.LOG_LEVEL || (nodeEnv === "test" ? "error" : "info")
+  logLevel: process.env.LOG_LEVEL || (nodeEnv === "test" ? "error" : "info"),
+  // Per-IP requests per minute for /api. Raise only for load tests or a shared-proxy shape.
+  apiRateLimitMax: Math.max(Number(process.env.API_RATE_LIMIT_MAX) || 600, 60)
 });
 
 export const sessionMaxAgeMs = env.sessionTtlDays * 24 * 60 * 60 * 1000;
