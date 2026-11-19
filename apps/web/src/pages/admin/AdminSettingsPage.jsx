@@ -13,6 +13,7 @@ const FIELDS = [
   { key: "institutePhone", label: "Phone", id: "set-phone", maxLength: 30 },
   { key: "instituteEmail", label: "Email", id: "set-email", maxLength: 120 },
   { key: "instituteAddress", label: "Address", id: "set-address", maxLength: 300 },
+  { key: "instituteTimezone", label: "Timezone (IANA)", id: "set-timezone", maxLength: 64 },
   { key: "receiptFooter", label: "Receipt footer", id: "set-footer", maxLength: 200 }
 ];
 

@@ -16,6 +16,8 @@ export const forbidden = (message = "You do not have access to this resource", c
   new AppError(403, message, { code });
 export const notFound = (message = "Resource not found") => new AppError(404, message, { code: "not_found" });
 export const conflict = (message) => new AppError(409, message, { code: "conflict" });
+export const attemptExpired = (message = "Time is up for this attempt") =>
+  new AppError(400, message, { code: "attempt_expired" });
 export const tooManyRequests = (message = "Too many requests. Try again later.") =>
   new AppError(429, message, { code: "rate_limited" });
 

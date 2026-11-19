@@ -4,7 +4,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Link, useParams } from "react-router-dom";
 import { adminStudentUpdateSchema } from "@coaching/shared";
-import { ArrowLeft, KeyRound, Pencil, Plus, Power, Receipt, Trash2, UserRound } from "lucide-react";
+import { ArrowLeft, KeyRound, Pencil, Plus, Power, Receipt, UserRound } from "lucide-react";
 import { adminService } from "../../services/admin.service.js";
 import { useBatches } from "../../hooks/useAdminLookups.js";
 import { useDocumentTitle } from "../../hooks/useDocumentTitle.js";
@@ -32,6 +32,11 @@ export function StudentDetailPage() {
   const [guardianEmail, setGuardianEmail] = useState("");
   const [guardianLogin, setGuardianLogin] = useState(null);
   const [enrollBatchId, setEnrollBatchId] = useState("");
+  const [enrollValidFrom, setEnrollValidFrom] = useState("");
+  const [enrollValidUntil, setEnrollValidUntil] = useState("");
+  const [transferring, setTransferring] = useState(null);
+  const [transferBatchId, setTransferBatchId] = useState("");
+  const [transferValidUntil, setTransferValidUntil] = useState("");
   const [tempPassword, setTempPassword] = useState(null);
   const [actionError, setActionError] = useState(null);
   const [pending, setPending] = useState(null);
@@ -71,19 +76,40 @@ export function StudentDetailPage() {
   });
 
   const enrollMutation = useMutation({
-    mutationFn: (batchId) => adminService.enrollStudent(id, batchId),
+    mutationFn: () =>
+      adminService.enrollStudent(id, {
+        batchId: enrollBatchId,
+        validFrom: enrollValidFrom || undefined,
+        validUntil: enrollValidUntil || undefined
+      }),
     onSuccess: () => {
       setEnrollOpen(false);
       setEnrollBatchId("");
+      setEnrollValidFrom("");
+      setEnrollValidUntil("");
       invalidate();
     },
     onError: (error) => setActionError(error.message)
   });
 
-  const unenrollMutation = useMutation({
-    mutationFn: (enrollmentId) => adminService.unenrollStudent(id, enrollmentId),
+  const closeEnrollmentMutation = useMutation({
+    mutationFn: ({ enrollmentId, status }) => adminService.closeEnrollment(id, enrollmentId, { status }),
     onSuccess: () => {
       setPending(null);
+      invalidate();
+    }
+  });
+
+  const transferMutation = useMutation({
+    mutationFn: () =>
+      adminService.transferEnrollment(id, transferring.id, {
+        batchId: transferBatchId,
+        validUntil: transferValidUntil || undefined
+      }),
+    onSuccess: () => {
+      setTransferring(null);
+      setTransferBatchId("");
+      setTransferValidUntil("");
       invalidate();
     }
   });
@@ -334,23 +360,55 @@ export function StudentDetailPage() {
                     {enrollment.batchName} <span className="mono cell-sub">({enrollment.batchCode})</span>
                   </p>
                   <p className="list__meta">
-                    {enrollment.courseName} · enrolled {formatDate(enrollment.enrolledAt)}
+                    {enrollment.courseName} · enrolled {formatDate(enrollment.enrolledAt)} · valid{" "}
+                    {enrollment.validFrom ? formatDate(enrollment.validFrom) : "open start"} →{" "}
+                    {enrollment.validUntil ? formatDate(enrollment.validUntil) : "open-ended"}
+                    {enrollment.endedAt ? ` · closed ${formatDate(enrollment.endedAt)}` : ""}
+                    {enrollment.endReason ? ` (${enrollment.endReason})` : ""}
                   </p>
+                  {enrollment.transferToBatchName ? (
+                    <p className="list__meta">
+                      Transferred to {enrollment.transferToBatchName}
+                      {enrollment.transferToBatchCode ? ` (${enrollment.transferToBatchCode})` : ""}
+                    </p>
+                  ) : null}
                 </div>
-                <div className="list__side row" style={{ gap: 8 }}>
+                <div className="list__side row" style={{ gap: 6, flexWrap: "wrap" }}>
                   <Badge tone={enrollment.status === "active" ? "success" : "neutral"}>{enrollment.status}</Badge>
-                  <button
-                    type="button"
-                    className="icon-btn"
-                    aria-label={`Remove ${enrollment.batchName}`}
-                    onClick={() => {
-                      unenrollMutation.reset();
-                      setPending({ type: "unenroll", enrollment });
-                    }}
-                    style={{ width: 32, height: 32 }}
-                  >
-                    <Trash2 size={14} />
-                  </button>
+                  {enrollment.status === "active" ? (
+                    <>
+                      <button
+                        type="button"
+                        className="btn btn--ghost btn--sm"
+                        onClick={() => {
+                          closeEnrollmentMutation.reset();
+                          setPending({ type: "close", status: "completed", enrollment });
+                        }}
+                      >
+                        Complete
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn--ghost btn--sm"
+                        onClick={() => {
+                          closeEnrollmentMutation.reset();
+                          setPending({ type: "close", status: "dropped", enrollment });
+                        }}
+                      >
+                        Withdraw
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn--ghost btn--sm"
+                        onClick={() => {
+                          transferMutation.reset();
+                          setTransferring(enrollment);
+                        }}
+                      >
+                        Transfer
+                      </button>
+                    </>
+                  ) : null}
                 </div>
               </li>
             ))}
@@ -360,7 +418,7 @@ export function StudentDetailPage() {
 
       <SectionCard title="Recent results" subtitle="Published examinations">
         {detail.results.length === 0 ? (
-          <EmptyState icon={Receipt} title="No published results" description="Results appear after an exam is evaluated." />
+          <EmptyState icon={Receipt} title="No published results" description="Results appear after your teacher publishes them." />
         ) : (
           <ul className="list">
             {detail.results.map((result) => (
@@ -462,7 +520,7 @@ export function StudentDetailPage() {
               type="button"
               className="btn btn--primary"
               disabled={!enrollBatchId || enrollMutation.isPending}
-              onClick={() => enrollMutation.mutate(enrollBatchId)}
+              onClick={() => enrollMutation.mutate()}
             >
               {enrollMutation.isPending ? "Enrolling…" : "Enrol student"}
             </button>
@@ -483,6 +541,78 @@ export function StudentDetailPage() {
               </option>
             ))}
           </select>
+        </FormField>
+        <FormField label="Valid from" htmlFor="enroll-from" hint="Institute-local date; blank means today.">
+          <input
+            id="enroll-from"
+            className="input"
+            type="date"
+            value={enrollValidFrom}
+            onChange={(event) => setEnrollValidFrom(event.target.value)}
+          />
+        </FormField>
+        <FormField label="Valid until" htmlFor="enroll-until" hint="Inclusive; blank means open-ended.">
+          <input
+            id="enroll-until"
+            className="input"
+            type="date"
+            value={enrollValidUntil}
+            onChange={(event) => setEnrollValidUntil(event.target.value)}
+          />
+        </FormField>
+      </Modal>
+
+      <Modal
+        open={Boolean(transferring)}
+        title="Transfer enrolment"
+        description="This will close the old enrollment as transferred. Attempts, submissions and invoices stay with it."
+        onClose={() => setTransferring(null)}
+        footer={
+          <>
+            <button type="button" className="btn btn--ghost" onClick={() => setTransferring(null)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn--primary"
+              disabled={!transferBatchId || transferMutation.isPending}
+              onClick={() => transferMutation.mutate()}
+            >
+              {transferMutation.isPending ? "Transferring…" : "Transfer"}
+            </button>
+          </>
+        }
+      >
+        {transferMutation.isError ? (
+          <div className="alert alert--error" role="alert" style={{ marginBottom: 12 }}>
+            {transferMutation.error.message}
+          </div>
+        ) : null}
+        <FormField label="New batch" htmlFor="transfer-batch">
+          <select
+            id="transfer-batch"
+            className="input"
+            value={transferBatchId}
+            onChange={(event) => setTransferBatchId(event.target.value)}
+          >
+            <option value="">Select a batch</option>
+            {(batchesQuery.data ?? [])
+              .filter((batch) => batch.id !== transferring?.batchId)
+              .map((batch) => (
+                <option key={batch.id} value={batch.id}>
+                  {batch.name} ({batch.code}) · {batch.courseName}
+                </option>
+              ))}
+          </select>
+        </FormField>
+        <FormField label="Valid until" htmlFor="transfer-until" hint="Blank keeps the old end date (or open-ended).">
+          <input
+            id="transfer-until"
+            className="input"
+            type="date"
+            value={transferValidUntil}
+            onChange={(event) => setTransferValidUntil(event.target.value)}
+          />
         </FormField>
       </Modal>
 
@@ -596,17 +726,19 @@ export function StudentDetailPage() {
       />
 
       <ConfirmDialog
-        open={pending?.type === "unenroll"}
-        title="Remove enrolment"
-        description={`Remove ${student.fullName} from ${pending?.enrollment?.batchName ?? "this batch"}? Attendance and results already recorded are kept.`}
-        confirmLabel="Remove enrolment"
-        tone="danger"
-        busy={unenrollMutation.isPending}
-        error={unenrollMutation.error?.message}
-        onConfirm={() => unenrollMutation.mutate(pending.enrollment.id)}
+        open={pending?.type === "close"}
+        title={pending?.status === "completed" ? "Complete enrolment" : "Withdraw enrolment"}
+        description={`Close ${student.fullName}'s enrolment in ${pending?.enrollment?.batchName ?? "this batch"}? Fees, attendance, results, attempts and submissions are kept.`}
+        confirmLabel={pending?.status === "completed" ? "Complete" : "Withdraw"}
+        tone={pending?.status === "completed" ? "primary" : "danger"}
+        busy={closeEnrollmentMutation.isPending}
+        error={closeEnrollmentMutation.error?.message}
+        onConfirm={() =>
+          closeEnrollmentMutation.mutate({ enrollmentId: pending.enrollment.id, status: pending.status })
+        }
         onClose={() => {
           setPending(null);
-          unenrollMutation.reset();
+          closeEnrollmentMutation.reset();
         }}
       />
     </div>

@@ -170,7 +170,34 @@ export const resetPasswordSchema = z.object({
   password: passwordSchema.optional().or(z.literal(""))
 });
 
-export const assignEnrollmentSchema = z.object({ batchId: uuidSchema });
+const enrollmentValidity = {
+  // Institute-local calendar dates; validUntil is inclusive.
+  validFrom: optionalDate,
+  validUntil: optionalDate
+};
+
+export const assignEnrollmentSchema = z
+  .object({ batchId: uuidSchema, ...enrollmentValidity })
+  .refine(
+    (value) => !value.validFrom || !value.validUntil || value.validUntil >= value.validFrom,
+    { message: "The end date must be on or after the start date", path: ["validUntil"] }
+  );
+
+export const closeEnrollmentSchema = z.object({
+  status: z.enum(["completed", "dropped"]),
+  reason: optionalText(300)
+});
+
+export const transferEnrollmentSchema = z
+  .object({
+    batchId: uuidSchema,
+    ...enrollmentValidity,
+    reason: optionalText(300)
+  })
+  .refine(
+    (value) => !value.validFrom || !value.validUntil || value.validUntil >= value.validFrom,
+    { message: "The end date must be on or after the start date", path: ["validUntil"] }
+  );
 
 export const assignTeacherSchema = z.object({
   batchId: uuidSchema,
@@ -375,18 +402,21 @@ export const examQuestionSchema = z.object(examQuestionFields).superRefine((valu
 
 export const examQuestionUpdateSchema = z.object(examQuestionFields).partial();
 
+const examAnswerSchema = z.object({
+  questionId: uuidSchema,
+  selectedOptionId: uuidSchema.optional().nullable(),
+  answerText: optionalText(8000),
+  markedForReview: z.boolean().optional()
+});
+
 export const examAnswerSaveSchema = z.object({
-  answers: z
-    .array(
-      z.object({
-        questionId: uuidSchema,
-        selectedOptionId: uuidSchema.optional().nullable(),
-        answerText: optionalText(8000),
-        markedForReview: z.boolean().optional()
-      })
-    )
-    .min(1, "Nothing to save")
-    .max(300)
+  answers: z.array(examAnswerSchema).min(1, "Nothing to save").max(300)
+});
+
+// Submit can carry the latest unsaved answers so grading never runs on an older
+// autosave. Empty bodies stay valid for older clients.
+export const examSubmitSchema = z.object({
+  answers: z.array(examAnswerSchema).max(300).optional()
 });
 
 export const responseEvaluationSchema = z.object({
@@ -420,7 +450,10 @@ export const feePaymentSchema = z.object({
   method: z.enum(["cash", "upi", "bank_transfer", "cheque", "card", "other"]),
   paidAt: z.string().trim().max(40).optional().or(z.literal("")),
   reference: optionalText(120),
-  notes: optionalText(500)
+  notes: optionalText(500),
+  // One key per payment action; retries reuse it so a double submit cannot
+  // create a second receipt.
+  requestId: z.string().trim().min(8).max(100).optional()
 });
 
 export const feeCorrectionSchema = z.object({
@@ -458,7 +491,22 @@ export const settingsSchema = z
     instituteAddress: settingText(300),
     institutePhone: settingText(30),
     instituteEmail: settingText(120),
-    receiptFooter: settingText(200)
+    receiptFooter: settingText(200),
+    instituteTimezone: z
+      .string()
+      .trim()
+      .max(64)
+      .optional()
+      .or(z.literal(""))
+      .refine((value) => {
+        if (!value) return true;
+        try {
+          new Intl.DateTimeFormat("en-US", { timeZone: value });
+          return true;
+        } catch {
+          return false;
+        }
+      }, "Use an IANA timezone such as Asia/Kolkata")
   })
   .partial();
 

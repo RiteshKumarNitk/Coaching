@@ -412,6 +412,21 @@
   color: var(--ink-600);
 }
 
+@media (max-width: 640px) {
+  .list__item {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .list__side,
+  .list__side.row {
+    width: 100%;
+    justify-content: flex-start;
+    text-align: left;
+  }
+}
+
 .list__icon {
   display: grid;
   place-items: center;
@@ -1166,6 +1181,156 @@ table.data tbody tr.is-clickable:focus-visible {
 }
 
 /* --------------------------------------------------------- student learning */
+.subject-list {
+  display: grid;
+  gap: 8px;
+}
+
+.subject-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 54px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: inherit;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.subject-row:hover {
+  border-color: var(--brand-300, #aebbe8);
+  background: var(--brand-50);
+  text-decoration: none;
+}
+
+.subject-row__main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.subject-row__main strong {
+  font-size: 0.88rem;
+  color: var(--ink-900);
+}
+
+.subject-row__action {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  color: var(--brand-700);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.resume-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-2);
+  color: inherit;
+  text-decoration: none;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.resume-card:hover {
+  border-color: var(--brand-300, #aebbe8);
+  background: var(--brand-50);
+  text-decoration: none;
+}
+
+.resume-card__main {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.resume-card__main strong {
+  font-size: 0.9rem;
+  color: var(--ink-900);
+  line-height: 1.35;
+}
+
+.resume-card__subject {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--brand-600);
+}
+
+.resume-card__action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  color: var(--brand-700);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.next-class {
+  display: flex;
+  align-items: stretch;
+  gap: 14px;
+}
+
+.next-class__day {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  min-width: 122px;
+  padding: 12px;
+  border-radius: 14px;
+  background: var(--brand-50);
+  color: var(--brand-800);
+}
+
+.next-class__day strong {
+  font-size: 0.84rem;
+  line-height: 1.35;
+}
+
+.next-class__details {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+}
+
+@media (max-width: 480px) {
+  .resume-card {
+    flex-wrap: wrap;
+  }
+
+  .resume-card__action {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .next-class {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .next-class__day {
+    min-width: 0;
+  }
+}
+
 .lesson-card {
   display: block;
   color: inherit;

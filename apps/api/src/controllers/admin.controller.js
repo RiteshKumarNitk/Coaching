@@ -35,7 +35,17 @@ export function createAdminController({ dashboards, students, teachers, academic
     },
 
     enrollStudent: async (req, res) => {
-      res.json(await students.assignEnrollment(req.params.id, req.body.batchId, actorOf(req), req.ip));
+      res.json(await students.assignEnrollment(req.params.id, req.body, actorOf(req), req.ip));
+    },
+
+    closeEnrollment: async (req, res) => {
+      res.json(await students.closeEnrollment(req.params.id, req.params.enrollmentId, req.body, actorOf(req), req.ip));
+    },
+
+    transferEnrollment: async (req, res) => {
+      res.json(
+        await students.transferEnrollment(req.params.id, req.params.enrollmentId, req.body, actorOf(req), req.ip)
+      );
     },
 
     unenrollStudent: async (req, res) => {

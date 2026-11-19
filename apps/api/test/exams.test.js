@@ -361,7 +361,9 @@ describe("phase 5 examinations", () => {
     });
     assert.equal(submitted.status, 200, submitted.text);
     assert.equal(submitted.json.pending, true);
-    assert.equal(submitted.json.status, "submitted");
+    assert.equal(submitted.json.submitted, true);
+    assert.equal(submitted.json.resultsPublished, false);
+    assert.equal("score" in submitted.json, false);
 
     const hidden = await request("/api/student/results", { cookie: state.studentCookie });
     assert.equal(hidden.status, 200);

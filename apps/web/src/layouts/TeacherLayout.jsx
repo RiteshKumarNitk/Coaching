@@ -6,7 +6,6 @@ import {
   Layers,
   ListChecks,
   Megaphone,
-  UserRound,
   Video
 } from "lucide-react";
 import { AppLayout } from "./AppLayout.jsx";
@@ -19,8 +18,7 @@ const items = [
   { to: "/teacher/materials", label: "Study material", icon: FileText },
   { to: "/teacher/assignments", label: "Assignments", icon: ClipboardList },
   { to: "/teacher/exams", label: "Exams", icon: ListChecks },
-  { to: "/teacher/notices", label: "Notices", icon: Megaphone },
-  { to: "/teacher/profile", label: "My profile", icon: UserRound }
+  { to: "/teacher/notices", label: "Notices", icon: Megaphone }
 ];
 
 export function TeacherLayout() {

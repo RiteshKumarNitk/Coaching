@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { BookOpen, ClipboardList, FileText, PlayCircle } from "lucide-react";
+import { ArrowRight, BookOpen, ClipboardList, FileText, PlayCircle } from "lucide-react";
 import { studentService } from "../../services/student.service.js";
 import { useDocumentTitle } from "../../hooks/useDocumentTitle.js";
 import { PageHeader } from "../../components/PageHeader.jsx";
@@ -22,7 +22,7 @@ export function StudentCoursesPage() {
 
   return (
     <>
-      <PageHeader title="My learning" description="Your course, lectures, notes and assignments in one place." />
+      <PageHeader title="My learning" description="Your course, subjects, lessons, notes and assignments in one place." />
 
       {courses.length === 0 ? (
         <SectionCard>
@@ -50,7 +50,7 @@ export function StudentCoursesPage() {
               <div>
                 <div className="row row--between small muted">
                   <span>
-                    {course.completedCount} of {course.lessonCount} lectures completed
+                    {course.completedCount} of {course.lessonCount} lessons completed
                   </span>
                   <span>{percent}%</span>
                 </div>
@@ -59,17 +59,42 @@ export function StudentCoursesPage() {
                 </div>
               </div>
 
-              <div className="row row--wrap" style={{ gap: 8 }}>
-                {course.subjects.map((subject) => (
-                  <Link key={subject.id} className="btn btn--ghost btn--sm" to={`/student/lectures?subject=${subject.id}`}>
-                    {subject.name}
-                  </Link>
-                ))}
+              <div className="stack" style={{ gap: 8 }}>
+                <div className="row row--between">
+                  <p className="label" style={{ margin: 0 }}>
+                    Subjects
+                  </p>
+                  <span className="small muted">Choose a subject to open its lessons</span>
+                </div>
+                {course.subjects.length === 0 ? (
+                  <p className="small muted">The office has not mapped subjects to this batch yet.</p>
+                ) : (
+                  <div className="subject-list">
+                    {course.subjects.map((subject) => (
+                      <Link
+                        key={subject.id}
+                        className="subject-row"
+                        to={`/student/lectures?batch=${course.batchId}&subject=${subject.id}`}
+                      >
+                        <span className="subject-row__main">
+                          <strong>{subject.name}</strong>
+                          <span className="small muted">
+                            {subject.lessonCount} {subject.lessonCount === 1 ? "lesson" : "lessons"} ·{" "}
+                            {subject.materialCount} PDF / note{subject.materialCount === 1 ? "" : "s"}
+                          </span>
+                        </span>
+                        <span className="subject-row__action">
+                          Open <ArrowRight size={14} aria-hidden="true" />
+                        </span>
+                      </Link>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div className="row row--wrap" style={{ gap: 8 }}>
-                <Link className="btn btn--primary btn--sm" to="/student/lectures">
-                  <PlayCircle size={15} /> Lectures
+                <Link className="btn btn--primary btn--sm" to={`/student/lectures?batch=${course.batchId}`}>
+                  <PlayCircle size={15} /> All lessons
                 </Link>
                 <Link className="btn btn--ghost btn--sm" to="/student/materials">
                   <FileText size={15} /> Notes ({course.materialCount})

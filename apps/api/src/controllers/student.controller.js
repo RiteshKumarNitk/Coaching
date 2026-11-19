@@ -76,7 +76,7 @@ export function createStudentController({ student, fees }) {
     },
 
     submitAttempt: async (req, res) => {
-      res.json(await student.submitAttempt(req.user.id, req.params.id, actorOf(req), req.ip));
+      res.json(await student.submitAttempt(req.user.id, req.params.id, req.body, actorOf(req), req.ip));
     },
 
     results: async (req, res) => {

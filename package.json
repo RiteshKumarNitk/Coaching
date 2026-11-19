@@ -18,6 +18,7 @@
     "test": "pnpm --recursive --if-present run test",
     "test:api": "pnpm --filter @coaching/api test",
     "smoke:ui": "node scripts/smoke-ui.js",
+    "verify:learning": "node scripts/verify-student-learning.js",
     "db:migrate": "node database/migrate.js",
     "db:seed": "node database/seeds/dev-seed.js",
     "db:clean": "node scripts/clean-demo-data.js",

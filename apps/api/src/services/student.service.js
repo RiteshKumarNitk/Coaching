@@ -1,7 +1,16 @@
-import { badRequest, notFound } from "../utils/AppError.js";
+import { attemptExpired, badRequest, notFound } from "../utils/AppError.js";
 import { gradeAttempt } from "./exams.grading.js";
 
 const num = (value) => Number(value ?? 0);
+
+/**
+ * Learning access: an active enrolment whose institute-local validity window
+ * includes today. NULL boundaries are open-ended for legacy rows.
+ */
+const learningEnrollment = (alias = "e") =>
+  `${alias}.status = 'active'
+   AND (${alias}.valid_from IS NULL OR ${alias}.valid_from <= institute_today())
+   AND (${alias}.valid_until IS NULL OR ${alias}.valid_until >= institute_today())`;
 
 /**
  * Phase 4 student app. Every query is scoped to an active enrolment of the
@@ -35,7 +44,7 @@ export function createStudentService(db, audit) {
        WHERE l.id = $1 AND l.status = 'published'
          AND EXISTS (
            SELECT 1 FROM enrollments e
-           WHERE e.student_id = $2 AND e.batch_id = l.batch_id AND e.status = 'active'
+           WHERE e.student_id = $2 AND e.batch_id = l.batch_id AND ${learningEnrollment()}
          )`,
       [lessonId, studentId]
     );
@@ -58,16 +67,20 @@ export function createStudentService(db, audit) {
        FROM enrollments e
        JOIN courses c ON c.id = e.course_id
        JOIN batches b ON b.id = e.batch_id
-       WHERE e.student_id = $1 AND e.status = 'active'
+       WHERE e.student_id = $1 AND ${learningEnrollment()}
        ORDER BY e.enrolled_at DESC`,
       [studentId]
     );
 
     const subjects = await db.many(
-      `SELECT bs.batch_id, s.id, s.code, s.name
+      `SELECT bs.batch_id, s.id, s.code, s.name,
+              (SELECT count(*)::int FROM lessons l
+               WHERE l.batch_id = bs.batch_id AND l.subject_id = s.id AND l.status = 'published') AS lesson_count,
+              (SELECT count(*)::int FROM study_materials m
+               WHERE m.batch_id = bs.batch_id AND m.subject_id = s.id AND m.status = 'published') AS material_count
        FROM batch_subjects bs
        JOIN subjects s ON s.id = bs.subject_id
-       WHERE bs.batch_id IN (SELECT batch_id FROM enrollments WHERE student_id = $1 AND status = 'active')
+       WHERE bs.batch_id IN (SELECT batch_id FROM enrollments e WHERE e.student_id = $1 AND ${learningEnrollment()})
        ORDER BY s.name`,
       [studentId]
     );
@@ -89,7 +102,13 @@ export function createStudentService(db, audit) {
       assignmentCount: num(row.assignment_count),
       subjects: subjects
         .filter((subject) => subject.batch_id === row.batch_id)
-        .map((subject) => ({ id: subject.id, code: subject.code, name: subject.name }))
+        .map((subject) => ({
+          id: subject.id,
+          code: subject.code,
+          name: subject.name,
+          lessonCount: num(subject.lesson_count),
+          materialCount: num(subject.material_count)
+        }))
     }));
   }
 
@@ -100,7 +119,7 @@ export function createStudentService(db, audit) {
        FROM batches b
        JOIN courses c ON c.id = b.course_id
        JOIN enrollments e ON e.batch_id = b.id
-       WHERE b.id = $1 AND e.student_id = $2 AND e.status = 'active'`,
+       WHERE b.id = $1 AND e.student_id = $2 AND ${learningEnrollment()}`,
       [batchId, studentId]
     );
     if (!batch) throw notFound("Batch not found");
@@ -157,7 +176,7 @@ export function createStudentService(db, audit) {
     const params = [studentId];
     const where = [
       "l.status = 'published'",
-      `EXISTS (SELECT 1 FROM enrollments e WHERE e.student_id = $1 AND e.batch_id = l.batch_id AND e.status = 'active')`
+      `EXISTS (SELECT 1 FROM enrollments e WHERE e.student_id = $1 AND e.batch_id = l.batch_id AND ${learningEnrollment()})`
     ];
     if (subjectId) {
       params.push(subjectId);
@@ -179,6 +198,8 @@ export function createStudentService(db, audit) {
       `SELECT l.id, l.batch_id, l.subject_id, l.title, l.chapter, l.duration_minutes,
               l.youtube_video_id, l.sort_order, l.published_at,
               s.name AS subject_name, b.name AS batch_name,
+              (SELECT count(*)::int FROM study_materials m
+               WHERE m.batch_id = l.batch_id AND m.subject_id = l.subject_id AND m.status = 'published') AS material_count,
               lp.last_position_seconds, lp.completed_at
        FROM lessons l
        JOIN subjects s ON s.id = l.subject_id
@@ -201,6 +222,8 @@ export function createStudentService(db, audit) {
         chapter: row.chapter,
         durationMinutes: row.duration_minutes,
         youtubeVideoId: row.youtube_video_id,
+        hasVideo: Boolean(row.youtube_video_id),
+        materialCount: num(row.material_count),
         sortOrder: row.sort_order,
         publishedAt: row.published_at,
         lastPositionSeconds: num(row.last_position_seconds),
@@ -235,7 +258,9 @@ export function createStudentService(db, audit) {
       ),
       db.many(
         `SELECT id FROM (
-           SELECT l.id, row_number() OVER (ORDER BY l.sort_order, l.created_at) AS position
+           SELECT l.id, row_number() OVER (
+             ORDER BY l.sort_order, l.published_at DESC NULLS LAST, l.created_at DESC
+           ) AS position
            FROM lessons l
            WHERE l.batch_id = $1 AND l.subject_id = $2 AND l.status = 'published'
          ) ordered`,
@@ -313,7 +338,7 @@ export function createStudentService(db, audit) {
     const params = [studentId];
     const where = [
       "m.status = 'published'",
-      `EXISTS (SELECT 1 FROM enrollments e WHERE e.student_id = $1 AND e.batch_id = m.batch_id AND e.status = 'active')`
+      `EXISTS (SELECT 1 FROM enrollments e WHERE e.student_id = $1 AND e.batch_id = m.batch_id AND ${learningEnrollment()})`
     ];
     if (subjectId) {
       params.push(subjectId);
@@ -365,9 +390,10 @@ export function createStudentService(db, audit) {
 
   async function listAssignments(studentId, { page = 1, pageSize = 20, batchId } = {}) {
     const params = [studentId];
+    // Assignment history stays readable after expiry; submission is gated below.
     const where = [
       "a.status IN ('published', 'closed')",
-      `EXISTS (SELECT 1 FROM enrollments e WHERE e.student_id = $1 AND e.batch_id = a.batch_id AND e.status = 'active')`
+      `EXISTS (SELECT 1 FROM enrollments e WHERE e.student_id = $1 AND e.batch_id = a.batch_id)`
     ];
     if (batchId) {
       params.push(batchId);
@@ -381,7 +407,9 @@ export function createStudentService(db, audit) {
       `SELECT a.id, a.batch_id, a.subject_id, a.title, a.instructions, a.due_at, a.max_marks, a.status,
               s.name AS subject_name, b.name AS batch_name,
               sub.id AS submission_id, sub.status AS submission_status, sub.marks_awarded,
-              sub.submitted_at, sub.feedback
+              sub.submitted_at, sub.feedback,
+              EXISTS (SELECT 1 FROM enrollments le
+                      WHERE le.student_id = $1 AND le.batch_id = a.batch_id AND ${learningEnrollment("le")}) AS learning_active
        FROM assignments a
        JOIN subjects s ON s.id = a.subject_id
        JOIN batches b ON b.id = a.batch_id
@@ -404,6 +432,7 @@ export function createStudentService(db, audit) {
         dueAt: row.due_at,
         maxMarks: row.max_marks,
         status: row.status,
+        canSubmit: Boolean(row.learning_active) && row.status === "published",
         submission: row.submission_id
           ? {
               id: row.submission_id,
@@ -429,7 +458,7 @@ export function createStudentService(db, audit) {
        JOIN batches b ON b.id = a.batch_id
        WHERE a.id = $1 AND a.status IN ('published', 'closed')
          AND EXISTS (SELECT 1 FROM enrollments e
-                     WHERE e.student_id = $2 AND e.batch_id = a.batch_id AND e.status = 'active')`,
+                     WHERE e.student_id = $2 AND e.batch_id = a.batch_id)`,
       [assignmentId, studentId]
     );
     if (!row) throw notFound("Assignment not found");
@@ -475,6 +504,12 @@ export function createStudentService(db, audit) {
   async function submitAssignment(studentId, assignmentId, { contentText, fileUrl }, ip, user) {
     const assignment = await assignmentForStudent(studentId, assignmentId);
     if (assignment.status !== "published") throw badRequest("This assignment is closed for submissions");
+    const learning = await db.one(
+      `SELECT 1 AS ok FROM enrollments e
+       WHERE e.student_id = $1 AND e.batch_id = $2 AND ${learningEnrollment()}`,
+      [studentId, assignment.batch_id]
+    );
+    if (!learning) throw badRequest("Your enrolment for this batch is not active");
     if (!contentText && !fileUrl) throw badRequest("Add your answer or a link to your work");
 
     const existing = await db.one(
@@ -577,9 +612,9 @@ export function createStudentService(db, audit) {
 
   async function listAnnouncements(studentId, { page = 1, pageSize = 20 } = {}) {
     const enrollment = await db.one(
-      `SELECT course_id, batch_id FROM enrollments
-       WHERE student_id = $1 AND status = 'active'
-       ORDER BY enrolled_at DESC LIMIT 1`,
+      `SELECT e.course_id, e.batch_id FROM enrollments e
+       WHERE e.student_id = $1 AND ${learningEnrollment()}
+       ORDER BY e.enrolled_at DESC LIMIT 1`,
       [studentId]
     );
 
@@ -642,7 +677,7 @@ export function createStudentService(db, audit) {
       await db.one(
         `SELECT count(*)::int AS count FROM exams e
          WHERE e.status IN ('scheduled', 'published', 'closed')
-           AND EXISTS (SELECT 1 FROM enrollments en WHERE en.student_id = $1 AND en.batch_id = e.batch_id AND en.status = 'active')`,
+           AND EXISTS (SELECT 1 FROM enrollments en WHERE en.student_id = $1 AND en.batch_id = e.batch_id AND ${learningEnrollment("en")})`,
         [studentId]
       )
     ).count;
@@ -650,7 +685,7 @@ export function createStudentService(db, audit) {
     const rows = await db.many(
       `${examSelect}
        WHERE e.status IN ('scheduled', 'published', 'closed')
-         AND EXISTS (SELECT 1 FROM enrollments en WHERE en.student_id = $1 AND en.batch_id = e.batch_id AND en.status = 'active')
+         AND EXISTS (SELECT 1 FROM enrollments en WHERE en.student_id = $1 AND en.batch_id = e.batch_id AND ${learningEnrollment("en")})
        ORDER BY e.starts_at DESC
        LIMIT $2 OFFSET $3`,
       [studentId, pageSize, (page - 1) * pageSize]
@@ -705,7 +740,7 @@ export function createStudentService(db, audit) {
     const row = await db.one(
       `${examSelect}
        WHERE e.id = $2 AND e.status IN ('scheduled', 'published', 'closed')
-         AND EXISTS (SELECT 1 FROM enrollments en WHERE en.student_id = $1 AND en.batch_id = e.batch_id AND en.status = 'active')`,
+         AND EXISTS (SELECT 1 FROM enrollments en WHERE en.student_id = $1 AND en.batch_id = e.batch_id AND ${learningEnrollment("en")})`,
       [studentId, examId]
     );
     if (!row) throw notFound("Exam not found");
@@ -723,12 +758,44 @@ export function createStudentService(db, audit) {
     if (exam.active_attempt_id) return getAttempt(studentId, exam.active_attempt_id);
     if (num(exam.my_attempts) >= exam.max_attempts) throw badRequest("You have used all attempts for this exam");
 
-    const attempt = await db.one(
-      `INSERT INTO exam_attempts (exam_id, student_id, attempt_no, expires_at)
-       VALUES ($1, $2, $3, LEAST(now() + make_interval(mins => $4::int), $5::timestamptz))
-       RETURNING id`,
-      [examId, studentId, num(exam.my_attempts) + 1, exam.duration_minutes, exam.ends_at]
-    );
+    let attempt;
+    try {
+      attempt = await db.transaction(async (tx) => {
+        // Share lock: question edits take an exclusive lock on this row, so a start
+        // and a paper edit cannot interleave. Multiple students can still start together.
+        await tx.one("SELECT id FROM exams WHERE id = $1 FOR SHARE", [examId]);
+        const active = await tx.one(
+          `SELECT id FROM exam_attempts WHERE exam_id = $1 AND student_id = $2 AND status = 'in_progress'
+           ORDER BY started_at DESC LIMIT 1`,
+          [examId, studentId]
+        );
+        if (active) return { existingId: active.id };
+        const count = await tx.one(
+          "SELECT count(*)::int AS count FROM exam_attempts WHERE exam_id = $1 AND student_id = $2",
+          [examId, studentId]
+        );
+        if (num(count.count) >= exam.max_attempts) throw badRequest("You have used all attempts for this exam");
+        return tx.one(
+          `INSERT INTO exam_attempts (exam_id, student_id, attempt_no, expires_at)
+           VALUES ($1, $2, $3, LEAST(now() + make_interval(mins => $4::int), $5::timestamptz))
+           RETURNING id`,
+          [examId, studentId, num(count.count) + 1, exam.duration_minutes, exam.ends_at]
+        );
+      });
+    } catch (error) {
+      // Two taps raced; the unique (exam, student, attempt_no) lets one insert win
+      // and both callers return that same attempt instead of a generic conflict.
+      if (error.code === "23505") {
+        const existing = await db.one(
+          `SELECT id FROM exam_attempts WHERE exam_id = $1 AND student_id = $2
+           ORDER BY started_at DESC LIMIT 1`,
+          [examId, studentId]
+        );
+        if (existing) return getAttempt(studentId, existing.id);
+      }
+      throw error;
+    }
+    if (attempt.existingId) return getAttempt(studentId, attempt.existingId);
 
     await audit.record({
       actorId: studentId,
@@ -744,15 +811,33 @@ export function createStudentService(db, audit) {
 
   async function getAttempt(studentId, attemptId) {
     const attempt = await db.one(
-      `SELECT a.id, a.exam_id, a.attempt_no, a.started_at, a.expires_at, a.submitted_at, a.status, a.score
-       FROM exam_attempts a WHERE a.id = $1 AND a.student_id = $2`,
+      `SELECT a.id, a.exam_id, a.attempt_no, a.started_at, a.expires_at, a.submitted_at, a.status, a.score,
+              e.results_published
+       FROM exam_attempts a JOIN exams e ON e.id = a.exam_id
+       WHERE a.id = $1 AND a.student_id = $2`,
       [attemptId, studentId]
     );
     if (!attempt) throw notFound("Attempt not found");
 
     if (attempt.status === "in_progress" && new Date(attempt.expires_at).getTime() < Date.now()) {
       await db.query("UPDATE exam_attempts SET status = 'expired' WHERE id = $1", [attemptId]);
-      attempt.status = "expired";
+      const graded = await gradeAttempt(db, attemptId);
+      attempt.status = graded.status;
+      attempt.score = graded.score;
+    }
+
+    if (attempt.status === "submitted" && attempt.score === null) {
+      // The process died after marking the attempt submitted but before grading.
+      // Finish it here so viewing or retrying the submission recovers the result.
+      await gradeAttempt(db, attemptId);
+      const recovered = await db.one(
+        `SELECT a.status, a.score, e.results_published
+         FROM exam_attempts a JOIN exams e ON e.id = a.exam_id WHERE a.id = $1`,
+        [attemptId]
+      );
+      attempt.status = recovered.status;
+      attempt.score = recovered.score;
+      attempt.results_published = recovered.results_published;
     }
 
     const exam = await db.one(
@@ -789,7 +874,9 @@ export function createStudentService(db, audit) {
         startedAt: attempt.started_at,
         expiresAt: attempt.expires_at,
         submittedAt: attempt.submitted_at,
-        score: attempt.score === null ? null : num(attempt.score),
+        resultsPublished: Boolean(attempt.results_published),
+        // A score is part of the published result, not of the submission confirmation.
+        score: attempt.results_published && attempt.score !== null ? num(attempt.score) : null,
         remainingSeconds:
           attempt.status === "in_progress"
             ? Math.max(0, Math.floor((new Date(attempt.expires_at).getTime() - Date.now()) / 1000))
@@ -822,18 +909,10 @@ export function createStudentService(db, audit) {
     };
   }
 
-  async function saveAttemptAnswers(studentId, attemptId, answers, user, ip) {
-    const attempt = await db.one(
-      "SELECT id, exam_id, status, expires_at FROM exam_attempts WHERE id = $1 AND student_id = $2",
-      [attemptId, studentId]
-    );
-    if (!attempt) throw notFound("Attempt not found");
-    if (attempt.status !== "in_progress") throw badRequest("This attempt is no longer open");
-    if (new Date(attempt.expires_at).getTime() < Date.now()) throw badRequest("Time is up for this attempt");
-
-    const questions = await db.many("SELECT id FROM exam_questions WHERE exam_id = $1", [attempt.exam_id]);
+  async function assertAnswersBelongToExam(runner, attempt, answers) {
+    const questions = await runner.many("SELECT id FROM exam_questions WHERE exam_id = $1", [attempt.exam_id]);
     const questionIds = new Set(questions.map((row) => row.id));
-    const options = await db.many(
+    const options = await runner.many(
       `SELECT o.id, o.question_id FROM exam_options o
        JOIN exam_questions q ON q.id = o.question_id WHERE q.exam_id = $1`,
       [attempt.exam_id]
@@ -851,26 +930,53 @@ export function createStudentService(db, audit) {
         if (!allowed || !allowed.has(answer.selectedOptionId)) throw badRequest("That option does not belong to the question");
       }
     }
+  }
+
+  async function writeAnswers(tx, attemptId, answers) {
+    for (const answer of answers) {
+      await tx.query(
+        `INSERT INTO exam_responses (attempt_id, question_id, selected_option_id, answer_text, is_marked_for_review)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (attempt_id, question_id) DO UPDATE SET
+           selected_option_id = EXCLUDED.selected_option_id,
+           answer_text = EXCLUDED.answer_text,
+           is_marked_for_review = EXCLUDED.is_marked_for_review,
+           updated_at = now()`,
+        [
+          attemptId,
+          answer.questionId,
+          answer.selectedOptionId ?? null,
+          answer.answerText || null,
+          Boolean(answer.markedForReview)
+        ]
+      );
+    }
+  }
+
+  async function saveAttemptAnswers(studentId, attemptId, answers, user, ip) {
+    const attempt = await db.one(
+      "SELECT id, exam_id, status, expires_at FROM exam_attempts WHERE id = $1 AND student_id = $2",
+      [attemptId, studentId]
+    );
+    if (!attempt) throw notFound("Attempt not found");
+    if (attempt.status !== "in_progress") throw badRequest("This attempt is no longer open");
+    if (new Date(attempt.expires_at).getTime() < Date.now()) throw attemptExpired();
+    await assertAnswersBelongToExam(db, attempt, answers);
 
     await db.transaction(async (tx) => {
-      for (const answer of answers) {
-        await tx.query(
-          `INSERT INTO exam_responses (attempt_id, question_id, selected_option_id, answer_text, is_marked_for_review)
-           VALUES ($1, $2, $3, $4, $5)
-           ON CONFLICT (attempt_id, question_id) DO UPDATE SET
-             selected_option_id = EXCLUDED.selected_option_id,
-             answer_text = EXCLUDED.answer_text,
-             is_marked_for_review = EXCLUDED.is_marked_for_review,
-             updated_at = now()`,
-          [
-            attemptId,
-            answer.questionId,
-            answer.selectedOptionId ?? null,
-            answer.answerText || null,
-            Boolean(answer.markedForReview)
-          ]
-        );
+      // Re-check under a row lock so a submit that commits between the check above
+      // and this write cannot be followed by an autosave overwriting answers.
+      const { rows: current } = await tx.query(
+        "SELECT status, expires_at FROM exam_attempts WHERE id = $1 FOR UPDATE",
+        [attemptId]
+      );
+      if (current[0]?.status !== "in_progress") {
+        throw badRequest("This attempt has been submitted; answers can no longer change");
       }
+      if (new Date(current[0].expires_at).getTime() < Date.now()) {
+        throw attemptExpired();
+      }
+      await writeAnswers(tx, attemptId, answers);
     });
 
     await audit.record({
@@ -886,29 +992,54 @@ export function createStudentService(db, audit) {
     return { attemptId, saved: answers.length, savedAt: new Date().toISOString() };
   }
 
-  async function submitAttempt(studentId, attemptId, user, ip) {
-    const attempt = await db.one(
-      "SELECT id, exam_id, status FROM exam_attempts WHERE id = $1 AND student_id = $2",
-      [attemptId, studentId]
-    );
-    if (!attempt) throw notFound("Attempt not found");
-    if (attempt.status === "evaluated") return getAttempt(studentId, attemptId);
-    if (!["in_progress", "expired"].includes(attempt.status)) {
-      throw badRequest("This attempt was already submitted");
+  async function submitAttempt(studentId, attemptId, payload = {}, user, ip) {
+    const answers = payload?.answers ?? [];
+
+    const outcome = await db.transaction(async (tx) => {
+      const attempt = await tx.one(
+        "SELECT id, exam_id, status, expires_at FROM exam_attempts WHERE id = $1 AND student_id = $2 FOR UPDATE",
+        [attemptId, studentId]
+      );
+      if (!attempt) throw notFound("Attempt not found");
+
+      // Persist the final answers in the same transaction that claims submission,
+      // but only while the server-side deadline is still open. A submit after the
+      // deadline grades what was already saved and cannot accept late answers.
+      if (attempt.status === "in_progress" && new Date(attempt.expires_at).getTime() >= Date.now() && answers.length > 0) {
+        await assertAnswersBelongToExam(tx, attempt, answers);
+        await writeAnswers(tx, attemptId, answers);
+      }
+
+      const claimed = await tx.one(
+        `UPDATE exam_attempts SET status = 'submitted', submitted_at = COALESCE(submitted_at, now())
+         WHERE id = $1 AND status IN ('in_progress', 'expired') RETURNING id`,
+        [attemptId]
+      );
+      return { attempt, claimed: Boolean(claimed) };
+    });
+
+    // Grading is idempotent and runs after the claim commit, so a crash here is
+    // recovered by the next read or submit.
+    const graded = await gradeAttempt(db, attemptId);
+    if (outcome.claimed) {
+      await audit.record({
+        actorId: studentId,
+        actorEmail: user.email,
+        action: "exam.attempt_submitted",
+        entityType: "exam_attempt",
+        entityId: attemptId,
+        metadata: { examId: outcome.attempt.exam_id, score: graded.score },
+        ip
+      });
     }
 
-    await db.query("UPDATE exam_attempts SET status = 'submitted', submitted_at = now() WHERE id = $1", [attemptId]);
-    const graded = await gradeAttempt(db, attemptId);
-    await audit.record({
-      actorId: studentId,
-      actorEmail: user.email,
-      action: "exam.attempt_submitted",
-      entityType: "exam_attempt",
-      entityId: attemptId,
-      metadata: { examId: attempt.exam_id, score: graded.score },
-      ip
-    });
-    return { attemptId, ...graded };
+    // Until staff publish the results, a student gets only a submission
+    // confirmation: no score, correctness, answer key or explanation.
+    const exam = await db.one("SELECT results_published FROM exams WHERE id = $1", [outcome.attempt.exam_id]);
+    if (!exam?.results_published) {
+      return { attemptId, submitted: true, resultsPublished: false, pending: graded.pending };
+    }
+    return { attemptId, submitted: true, resultsPublished: true, ...graded };
   }
 
   async function listResults(studentId, { page = 1, pageSize = 20 } = {}) {

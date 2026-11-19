@@ -346,52 +346,116 @@ export function createFeesService(db, audit, notifications) {
 
   async function recordPayment(feeId, payload, user, ip) {
     const amount = money(payload.amount);
+    const requestId = payload.requestId?.trim() || null;
+    const referenceInput = nullIfEmpty(payload.reference);
+    const notesInput = nullIfEmpty(payload.notes);
+    const paidAtInput = nullIfEmpty(payload.paidAt);
+
+    /** Does an existing idempotent payment describe this same request? */
+    const matchesRequest = (row) =>
+      row.student_fee_id === feeId &&
+      money(row.amount) === amount &&
+      row.method === payload.method &&
+      (row.reference ?? null) === referenceInput &&
+      (row.notes ?? null) === notesInput &&
+      (!paidAtInput || new Date(row.paid_at).getTime() === new Date(paidAtInput).getTime());
+
+    /** The stored receipt plus the invoice's current money state. */
+    async function replayReceipt(row) {
+      const { rows: paidRows } = await db.query(
+        `SELECT COALESCE(SUM(amount), 0)::numeric AS paid FROM payments
+         WHERE student_fee_id = $1 AND voided_at IS NULL`,
+        [feeId]
+      );
+      const { rows: feeRows } = await db.query("SELECT net_amount FROM student_fees WHERE id = $1", [feeId]);
+      const paid = money(paidRows[0]?.paid);
+      const net = money(feeRows[0]?.net_amount);
+      return {
+        id: row.id,
+        receiptNo: row.receipt_no,
+        paidAt: row.paid_at,
+        amount: money(row.amount),
+        status: paid >= net ? "paid" : paid > 0 ? "partial" : "pending",
+        paidAmount: paid,
+        pendingAmount: Math.max(0, money(net - paid)),
+        replayed: true
+      };
+    }
+
+    if (requestId) {
+      const existing = await db.one("SELECT * FROM payments WHERE request_id = $1", [requestId]);
+      if (existing) {
+        if (!matchesRequest(existing)) {
+          throw conflict("This payment request was already used with different details");
+        }
+        return replayReceipt(existing);
+      }
+    }
+
     const receiptNo = `RCPT-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${Math.random()
       .toString(36)
       .slice(2, 6)
       .toUpperCase()}`;
 
-    const payment = await db.transaction(async (tx) => {
-      // Lock the invoice: two clerks taking cash at the same moment must not both
-      // pass the pending-amount check and overpay the same fee.
-      const { rows: feeRows } = await tx.query(
-        `SELECT id, student_id, net_amount, status FROM student_fees WHERE id = $1 FOR UPDATE`,
-        [feeId]
-      );
-      const fee = feeRows[0];
-      if (!fee) throw notFound("Fee not found");
-      if (fee.status === "waived") throw badRequest("This fee has been waived");
+    let payment;
+    try {
+      payment = await db.transaction(async (tx) => {
+        // Lock the invoice: two clerks taking cash at the same moment must not both
+        // pass the pending-amount check and overpay the same fee.
+        const { rows: feeRows } = await tx.query(
+          `SELECT id, student_id, net_amount, status FROM student_fees WHERE id = $1 FOR UPDATE`,
+          [feeId]
+        );
+        const fee = feeRows[0];
+        if (!fee) throw notFound("Fee not found");
+        if (fee.status === "waived") throw badRequest("This fee has been waived");
 
-      const { rows: paidRows } = await tx.query(
-        `SELECT COALESCE(SUM(amount), 0)::numeric AS paid FROM payments
-         WHERE student_fee_id = $1 AND voided_at IS NULL`,
-        [feeId]
-      );
-      const paid = money(paidRows[0].paid);
-      const net = money(fee.net_amount);
-      const pending = Math.max(0, money(net - paid));
-      if (amount > pending) throw badRequest(`The pending amount is ₹${pending.toFixed(2)}`);
+        const { rows: paidRows } = await tx.query(
+          `SELECT COALESCE(SUM(amount), 0)::numeric AS paid FROM payments
+           WHERE student_fee_id = $1 AND voided_at IS NULL`,
+          [feeId]
+        );
+        const paid = money(paidRows[0].paid);
+        const net = money(fee.net_amount);
+        const pending = Math.max(0, money(net - paid));
+        if (amount > pending) throw badRequest(`The pending amount is ₹${pending.toFixed(2)}`);
 
-      const { rows } = await tx.query(
-        `INSERT INTO payments (receipt_no, student_fee_id, student_id, amount, method, paid_at, reference, notes, recorded_by)
-         VALUES ($1, $2, $3, $4, $5, COALESCE($6::timestamptz, now()), $7, $8, $9) RETURNING id, receipt_no, paid_at`,
-        [
-          receiptNo,
-          feeId,
-          fee.student_id,
-          amount,
-          payload.method,
-          nullIfEmpty(payload.paidAt),
-          nullIfEmpty(payload.reference),
-          nullIfEmpty(payload.notes),
-          user.id
-        ]
-      );
-      const newPaid = money(paid + amount);
-      const status = newPaid >= net ? "paid" : newPaid > 0 ? "partial" : "pending";
-      await tx.query("UPDATE student_fees SET status = $2, updated_at = now() WHERE id = $1", [feeId, status]);
-      return { ...rows[0], status, paidAmount: newPaid, pendingAmount: Math.max(0, money(net - newPaid)) };
-    });
+        const { rows } = await tx.query(
+          `INSERT INTO payments (receipt_no, student_fee_id, student_id, amount, method, paid_at, reference, notes, recorded_by, request_id)
+           VALUES ($1, $2, $3, $4, $5, COALESCE($6::timestamptz, now()), $7, $8, $9, $10)
+           RETURNING id, receipt_no, paid_at`,
+          [
+            receiptNo,
+            feeId,
+            fee.student_id,
+            amount,
+            payload.method,
+            paidAtInput,
+            referenceInput,
+            notesInput,
+            user.id,
+            requestId
+          ]
+        );
+        const newPaid = money(paid + amount);
+        const status = newPaid >= net ? "paid" : newPaid > 0 ? "partial" : "pending";
+        await tx.query("UPDATE student_fees SET status = $2, updated_at = now() WHERE id = $1", [feeId, status]);
+        return { ...rows[0], status, paidAmount: newPaid, pendingAmount: Math.max(0, money(net - newPaid)) };
+      });
+    } catch (error) {
+      // A concurrent retry with the same key lost the unique-index race: return the
+      // receipt the winner created (or reject a different payload for that key).
+      if (error.code === "23505" && requestId) {
+        const existing = await db.one("SELECT * FROM payments WHERE request_id = $1", [requestId]);
+        if (existing) {
+          if (!matchesRequest(existing)) {
+            throw conflict("This payment request was already used with different details");
+          }
+          return replayReceipt(existing);
+        }
+      }
+      throw error;
+    }
 
     await audit.record({
       actorId: user.id,
@@ -399,7 +463,7 @@ export function createFeesService(db, audit, notifications) {
       action: "payment.recorded",
       entityType: "student_fee",
       entityId: feeId,
-      metadata: { paymentId: payment.id, amount, method: payload.method },
+      metadata: { paymentId: payment.id, amount, method: payload.method, requestId },
       ip
     });
 
@@ -410,7 +474,8 @@ export function createFeesService(db, audit, notifications) {
       amount,
       status: payment.status,
       paidAmount: payment.paidAmount,
-      pendingAmount: payment.pendingAmount
+      pendingAmount: payment.pendingAmount,
+      replayed: false
     };
   }
 

@@ -20,6 +20,10 @@ export function createExamsController({ exams }) {
       res.json(await exams.updateExam(req.params.id, req.body, actorOf(req), req.ip));
     },
 
+    duplicate: async (req, res) => {
+      res.status(201).json(await exams.duplicateExam(req.params.id, actorOf(req), req.ip));
+    },
+
     remove: async (req, res) => {
       res.json(await exams.deleteExam(req.params.id, actorOf(req), req.ip));
     },
@@ -78,7 +82,9 @@ export function createFeesController({ fees }) {
     },
 
     recordPayment: async (req, res) => {
-      res.status(201).json(await fees.recordPayment(req.params.id, req.body, actorOf(req), req.ip));
+      const result = await fees.recordPayment(req.params.id, req.body, actorOf(req), req.ip);
+      // A replayed request returns the original receipt, so it is not a new creation.
+      res.status(result.replayed ? 200 : 201).json(result);
     },
 
     payments: async (req, res) => {

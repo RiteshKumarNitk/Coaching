@@ -34,6 +34,7 @@ const state = {
   courseId: "",
   subjectId: "",
   lessonId: "",
+  secondLessonId: "",
   draftLessonId: "",
   otherLessonId: "",
   assignmentId: "",
@@ -129,6 +130,14 @@ before(async () => {
   for (const batchId of [state.batchId, state.otherBatchId]) {
     await db.query("INSERT INTO batch_subjects (batch_id, subject_id) VALUES ($1, $2)", [batchId, state.subjectId]);
   }
+  state.nextClassDate = (
+    await db.query("SELECT to_char(institute_today() + 1, 'YYYY-MM-DD') AS date")
+  ).rows[0].date;
+  await db.query(
+    `INSERT INTO batch_schedules (batch_id, subject_id, day_of_week, start_time, end_time, room)
+     VALUES ($1, $2, EXTRACT(DOW FROM institute_today() + 1)::int, '09:00', '10:00', 'Room 4')`,
+    [state.batchId, state.subjectId]
+  );
 
   await db.query("INSERT INTO enrollments (student_id, batch_id, course_id) VALUES ($1, $2, $3)", [
     studentId,
@@ -147,6 +156,12 @@ before(async () => {
     [state.batchId, state.subjectId]
   );
   state.lessonId = lesson.rows[0].id;
+  const secondLesson = await db.query(
+    `INSERT INTO lessons (batch_id, subject_id, title, chapter, duration_minutes, sort_order, status, published_at)
+     VALUES ($1, $2, 'Reading and notes', 'Revision', 10, 1, 'published', now()) RETURNING id`,
+    [state.batchId, state.subjectId]
+  );
+  state.secondLessonId = secondLesson.rows[0].id;
   const draft = await db.query(
     `INSERT INTO lessons (batch_id, subject_id, title, status) VALUES ($1, $2, 'Draft lecture', 'draft') RETURNING id`,
     [state.batchId, state.subjectId]
@@ -277,10 +292,15 @@ describe("phase 4 student app", () => {
   it("lists published lectures only, and blocks other batches", async () => {
     const list = await request("/api/student/lessons", { cookie: state.studentCookie });
     assert.equal(list.status, 200);
-    assert.equal(list.json.total, 1);
-    assert.equal(list.json.items[0].title, "Published lecture");
-    assert.equal(list.json.items[0].youtubeVideoId, "dQw4w9WgXcQ");
-    assert.equal(list.json.items[0].completed, false);
+    assert.equal(list.json.total, 2);
+    const published = list.json.items.find((lesson) => lesson.id === state.lessonId);
+    assert.equal(published.title, "Published lecture");
+    assert.equal(published.youtubeVideoId, "dQw4w9WgXcQ");
+    assert.equal(published.hasVideo, true);
+    assert.equal(published.materialCount, 1);
+    assert.equal(published.completed, false);
+    const notesOnly = list.json.items.find((lesson) => lesson.id === state.secondLessonId);
+    assert.equal(notesOnly.hasVideo, false, "PDF-only lessons are distinguishable");
 
     const draft = await request(`/api/student/lessons/${state.draftLessonId}`, { cookie: state.studentCookie });
     assert.equal(draft.status, 404);
@@ -298,6 +318,11 @@ describe("phase 4 student app", () => {
     assert.equal(detail.status, 200);
     assert.equal(detail.json.lesson.subjectName, "Student Subject");
     assert.equal(detail.json.nextLessonId, null);
+    assert.equal(detail.json.previousLessonId, state.secondLessonId, "lesson order matches the published list");
+    const reading = await request(`/api/student/lessons/${state.secondLessonId}`, { cookie: state.studentCookie });
+    assert.equal(reading.status, 200);
+    assert.equal(reading.json.previousLessonId, null);
+    assert.equal(reading.json.nextLessonId, state.lessonId);
 
     const saved = await request(`/api/student/lessons/${state.lessonId}/progress`, {
       method: "POST",
@@ -322,7 +347,7 @@ describe("phase 4 student app", () => {
     assert.equal(rows.rows[0].count, 1, "progress must upsert");
 
     const list = await request("/api/student/lessons", { cookie: state.studentCookie });
-    assert.equal(list.json.items[0].completed, true);
+    assert.equal(list.json.items.find((lesson) => lesson.id === state.lessonId).completed, true);
 
     const foreign = await request(`/api/student/lessons/${state.lessonId}/progress`, {
       method: "POST",
@@ -330,6 +355,27 @@ describe("phase 4 student app", () => {
       body: { positionSeconds: 10 }
     });
     assert.equal(foreign.status, 404);
+  });
+
+  it("assembles resume, next class and pending work on the student home", async () => {
+    const home = await request("/api/student/dashboard", { cookie: state.studentCookie });
+    assert.equal(home.status, 200, home.text);
+    assert.equal(home.json.resumeLesson.id, state.secondLessonId, "the unfinished lesson is next to resume");
+    assert.equal(home.json.resumeLesson.title, "Reading and notes");
+    assert.equal(home.json.resumeLesson.subjectName, "Student Subject");
+    assert.equal(home.json.nextClass.subjectName, "Student Subject");
+    assert.equal(home.json.nextClass.room, "Room 4");
+    assert.equal(home.json.nextClass.nextDate, state.nextClassDate);
+    assert.equal(home.json.pendingAssignmentsTotal, 2);
+    assert.equal(home.json.pendingAssignments[0].title, "Past due set", "the earliest due work comes first");
+    assert.equal(home.json.announcements.length, 3);
+    assert.equal(home.json.fees.total, 0);
+
+    const other = await request("/api/student/dashboard", { cookie: state.outsiderCookie });
+    assert.equal(other.status, 200, other.text);
+    assert.equal(other.json.nextClass, null, "another batch's timetable must not leak");
+    assert.equal(other.json.pendingAssignmentsTotal, 0);
+    assert.equal(other.json.resumeLesson.id, state.otherLessonId);
   });
 
   it("serves published study material only", async () => {

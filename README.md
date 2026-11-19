@@ -4,10 +4,11 @@ A zero-monthly-cost coaching management system for a single institute: a mobile-
 student app (installable PWA), a teacher workspace and an administration dashboard,
 backed by an Express REST API and PostgreSQL (Neon in production).
 
-**Current status: Phases 1–6 are implemented and verified.** Administration, the teacher
-workspace, the student app, examinations and fees are built; only hardening and deployment
-(Phase 7) remain — see [Roadmap](#roadmap). Nothing in the UI is a mockup: every number
-and list is read from PostgreSQL for the signed-in user.
+**Current status: Phases 1–6 and the student learning experience are implemented and
+verified locally.** Administration, the teacher workspace, the student app, examinations,
+fees and the course → subject → lesson flow are built. Production deployment remains
+pending, including the PostgreSQL/Neon restore drill — see [Roadmap](#roadmap). Nothing
+in the UI is a mockup: every number and list is read from PostgreSQL for the signed-in user.
 
 ---
 
@@ -24,7 +25,8 @@ and list is read from PostgreSQL for the signed-in user.
 | Server-side authorization on every protected route | ✅ |
 | Admin dashboard with live metrics, attendance/admission charts, lists | ✅ |
 | Teacher dashboard with batch-scoped data | ✅ |
-| Student dashboard: schedule, attendance, fees, tests, results, notices | ✅ |
+| Student home: resume lesson, next class, pending work, fees, tests, results, notices | ✅ |
+| Student learning: course → subject → lesson, YouTube player, resume position, PDF links, completion | ✅ |
 | Profile + password change (revokes other sessions) | ✅ |
 | PWA: manifest, icons, service worker, offline page | ✅ |
 | Admin/teacher/student CLI + CSV import/export scripts | ✅ |
@@ -78,6 +80,7 @@ Express API over HTTPS, and only through the HttpOnly session cookie.
 | `pnpm lint` | ESLint across the workspace |
 | `pnpm test` | API integration tests (node:test) |
 | `pnpm smoke:ui` | Browser smoke test (real Chrome/Edge, built SPA, temp database): login, role scoping, admin dashboard. Run `pnpm build` first |
+| `pnpm verify:learning` | Teacher-publishes → student-learns walkthrough on a disposable database, desktop + 390px, with screenshots |
 | `pnpm db:migrate` | Applies pending SQL migrations |
 | `pnpm db:seed` | Development-only sample institute data |
 | `pnpm check:db` | Connection, migration and row-count report |
@@ -154,4 +157,5 @@ is not sized for 1,000 concurrent exam takers.
 - **Phase 4 (done):** student app — courses, lecture player with progress, notes, assignments + submissions, attendance history, announcements.
 - **Phase 5 (done):** examinations — question bank, secure timed attempts with autosave, MCQ auto-grading, subjective evaluation, results publishing; teachers manage exams for their own batches from `/teacher/exams`.
 - **Phase 6 (done):** fees — structures, assignment, offline payments with receipts, dues report, student ledger.
-- **Phase 7 (in progress):** hardening and the preflight/load-test tooling are done; hosting and Android install testing are still to do — see `docs/DEPLOYMENT.md`.
+- **Student learning (done locally):** home resume/next class/pending work, course → subject → lesson navigation, YouTube + PDF delivery, saved position and completion, desktop and 390px verification.
+- **Phase 7 (in progress):** hardening and the preflight/load-test tooling are done; the PostgreSQL/Neon restore drill, hosting and Android install testing are still to do — see `docs/DEPLOYMENT.md`.

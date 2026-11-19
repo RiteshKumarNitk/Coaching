@@ -10,7 +10,6 @@ import {
   ScrollText,
   Settings,
   ShieldCheck,
-  UserRound,
   Users,
   Wallet
 } from "lucide-react";
@@ -30,8 +29,7 @@ const items = [
   { to: "/admin/reports", label: "Reports", icon: BarChart3, permission: "fees:read" },
   { to: "/admin/team", label: "Staff accounts", icon: ShieldCheck, permission: "admins:manage" },
   { to: "/admin/audit", label: "Audit log", icon: ScrollText, permission: "audit:read" },
-  { to: "/admin/settings", label: "Settings", icon: Settings, permission: "settings:manage" },
-  { to: "/admin/profile", label: "My profile", icon: UserRound }
+  { to: "/admin/settings", label: "Settings", icon: Settings, permission: "settings:manage" }
 ];
 
 export function AdminLayout() {

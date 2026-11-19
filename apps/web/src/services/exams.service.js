@@ -28,6 +28,7 @@ function buildExamService(base) {
         ...(payload.startsAt ? { startsAt: toIso(payload.startsAt) } : {}),
         ...(payload.endsAt ? { endsAt: toIso(payload.endsAt) } : {})
       }),
+    duplicate: (id) => api.post(`${base}/exams/${id}/duplicate`, {}),
     addQuestion: (id, payload) => api.post(`${base}/exams/${id}/questions`, payload),
     updateQuestion: (id, payload) => api.patch(`${base}/questions/${id}`, payload),
     deleteQuestion: (id) => api.del(`${base}/questions/${id}`),

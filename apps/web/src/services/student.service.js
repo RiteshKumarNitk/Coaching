@@ -31,7 +31,7 @@ export const studentService = {
   startAttempt: (examId) => api.post(`/api/student/exams/${examId}/attempts`, {}),
   attempt: (id) => api.get(`/api/student/attempts/${id}`),
   saveAnswers: (id, answers) => api.patch(`/api/student/attempts/${id}/answers`, { answers }),
-  submitAttempt: (id) => api.post(`/api/student/attempts/${id}/submit`, {}),
+  submitAttempt: (id, payload = {}) => api.post(`/api/student/attempts/${id}/submit`, payload),
   results: (params) => api.get(`/api/student/results${query(params)}`),
 
   fees: () => api.get("/api/student/fees")

@@ -110,7 +110,7 @@ erDiagram
 | --- | --- | --- |
 | `fee_structures` | Price per course/year | unique `(course_id, academic_year, name)` |
 | `student_fees` | Individual invoice | `net_amount = total_amount - discount_amount` |
-| `payments` | Offline payment record | unique `receipt_no`, amount > 0 |
+| `payments` | Offline payment record | unique `receipt_no`, amount > 0; unique partial `request_id` |
 | `announcements` | Targeted notices | audience check must match target column |
 | `notifications` | In-app notifications per user | partial index on unread |
 
@@ -147,7 +147,37 @@ Rules:
 4. Test on a branch/database copy first: `pnpm db:migrate` against a disposable
    `DATABASE_URL`.
 
-## 5. Seed data
+## 5. Payment idempotency
+
+`payments.request_id` is nullable for backward compatibility. A payment request that
+omits it **has no retry-deduplication guarantee**: if the response is lost after the
+server commits, retrying can create a second receipt. The web payment dialog always
+sends one stable `crypto.randomUUID()` per payment action and reuses it on retries.
+Any new payment caller must do the same, and may not invent a new key for a retry.
+
+A key is bound to the invoice and payment details. Replaying the same key and payload
+returns the original receipt (`200`, `replayed: true`); changing the amount, method,
+reference, notes, paid date or invoice for an existing key returns `409` and creates
+nothing. Keep the old key on failure: generating a fresh key after a failed request
+would defeat the guarantee.
+
+The fee dialog stores an unconfirmed `{ requestId, form }` in tab-scoped
+`sessionStorage`, keyed by invoice. Closing and reopening the dialog or refreshing the
+page restores the same key and details, so a retry checks the original request rather
+than creating a new one. A `409` keeps that pending key and tells the clerk to restore
+the original details; a successful replay clears it. If storage is unavailable or the
+tab is closed, the browser cannot recover the key: the dialog refreshes the invoice,
+summaries and receipt list first, and the clerk must check the receipt list before
+entering a new payment. A genuinely new payment after a confirmed receipt is a new key
+and is not deduplicated against the old one.
+
+Schema rollback order: deploy/roll back application code **before** removing the
+column, then run `DROP INDEX payments_request_id_key; ALTER TABLE payments DROP COLUMN
+request_id;` and delete the `0011_payment_idempotency.sql` row from `schema_migrations`.
+Re-applying the additive migration restores the column/index and leaves old receipts
+with a NULL key. `scripts/backup-restore-drill.js` rehearses this on disposable PGlite databases.
+
+## 6. Seed data
 
 `database/seeds/dev-seed.js` inserts one institute's worth of data: 1 super admin,
 1 admin, 3 teachers, 8 students, 2 courses, 2 batches, timetable, 21 days of attendance,
@@ -157,26 +187,45 @@ with protected keys and published results, one upcoming exam per batch, announce
 It refuses to run with `NODE_ENV=production` unless `--force`, and does nothing if the
 seed marker (`JEE-2027` course) already exists.
 
-## 6. Backup and restore
+## 7. Backup and restore
 
-Logical export (safe, no secrets):
+### PGlite restore drill (not PostgreSQL/Neon)
+
+`node scripts/backup-restore-drill.js` creates a disposable PGlite database, applies all
+migrations, writes a payment fixture, closes it, copies the **PGlite data directory**,
+restores that copy into a second directory, verifies schema/migrations/rows, then
+rehearses the `request_id` rollback and re-apply. This is useful regression evidence for
+the migration and rollback sequence, but it is **not** a PostgreSQL backup test: it does
+not use `pg_dump`/`pg_restore`, WAL, roles, extensions, Neon branches or snapshots.
+
+### PostgreSQL-compatible restore — currently BLOCKED
+
+As of 2026-11-17 this environment has no `pg_dump`/`pg_restore`, no disposable
+PostgreSQL server and no Docker. A real PostgreSQL backup/restore into a separate
+disposable database has therefore **not** been run, and Neon restore is **not verified**.
+Production readiness remains blocked on that drill. When the tools and a disposable
+PostgreSQL target are available:
+
+```bash
+pg_dump "$SOURCE_DATABASE_URL" --no-owner --no-acl -Fc -f backup.dump
+pg_restore --no-owner --no-acl --clean --if-exists -d "$DISPOSABLE_DATABASE_URL" backup.dump
+# Then run the migration checks and API smoke against the restored database.
+```
+
+Never point `$DISPOSABLE_DATABASE_URL` at production. Do not treat the PGlite drill or a
+Neon snapshot as evidence that `pg_restore` works.
+
+Logical export (safe, no secrets, not a restore drill):
 
 ```bash
 pnpm export-database       # backups/export-<timestamp>/*.ndjson + manifest.json
-```
-
-Full physical backup (requires `pg_dump`):
-
-```bash
-pg_dump "$DATABASE_URL" --no-owner --no-acl -Fc -f backup.dump
-pg_restore --no-owner --no-acl -d "$DATABASE_URL" backup.dump
 ```
 
 Neon Free also provides a 6-hour instant-restore window (capped at 1 GB of changes) and
 one manual snapshot per project. Take a manual snapshot before major migrations, and keep
 exported files outside the repository — they contain student data.
 
-## 7. Connection pooling
+## 8. Connection pooling
 
 - API: `pg.Pool` with `max: 10`, 30 s idle timeout, 10 s connect timeout.
 - Neon: use the `-pooler` connection string in `DATABASE_URL` for serverless hosts.

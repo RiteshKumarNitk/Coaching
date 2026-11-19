@@ -7,6 +7,7 @@ import {
   attendanceSaveSchema,
   examAnswerSaveSchema,
   examCreateSchema,
+  examSubmitSchema,
   examQuestionSchema,
   examQuestionUpdateSchema,
   examUpdateSchema,
@@ -169,6 +170,12 @@ export function createTeacherRouter({
     asyncHandler(examsController.update)
   );
   router.post(
+    "/exams/:id/duplicate",
+    manageExams,
+    validate({ params: idParams }),
+    asyncHandler(examsController.duplicate)
+  );
+  router.post(
     "/exams/:id/questions",
     manageExams,
     validate({ params: idParams, body: examQuestionSchema }),
@@ -280,7 +287,11 @@ export function createStudentRouter({ authMiddleware, dashboardController, stude
     validate({ params: idParams, body: examAnswerSaveSchema }),
     asyncHandler(studentController.saveAnswers)
   );
-  router.post("/attempts/:id/submit", validate({ params: idParams }), asyncHandler(studentController.submitAttempt));
+  router.post(
+    "/attempts/:id/submit",
+    validate({ params: idParams, body: examSubmitSchema }),
+    asyncHandler(studentController.submitAttempt)
+  );
   router.get("/results", validate({ query: paginationSchema }), asyncHandler(studentController.results));
 
   /* fees */

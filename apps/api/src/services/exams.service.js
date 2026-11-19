@@ -40,6 +40,18 @@ export function createExamsService(db, audit, notifications) {
     return exam;
   }
 
+  /**
+   * Once any student has started the exam, its paper is frozen: question text,
+   * options, keys and marking can no longer change under an attempt. Corrected
+   * versions come from `duplicateExam`, not from editing a live paper.
+   */
+  async function assertNoAttempts(examId, message) {
+    const attempts = await db.one("SELECT count(*)::int AS count FROM exam_attempts WHERE exam_id = $1", [examId]);
+    if (num(attempts.count) > 0) throw conflict(message);
+  }
+
+  const FROZEN_AFTER_ATTEMPTS = ["examType", "startsAt", "endsAt", "durationMinutes", "passMarks", "maxAttempts"];
+
   const mapExam = (row) => ({
     id: row.id,
     batchId: row.batch_id,
@@ -249,6 +261,21 @@ export function createExamsService(db, audit, notifications) {
 
   async function updateExam(id, payload, user, ip) {
     const exam = await assertExamAccess(id, user);
+    const unchanged = (field, next) => {
+      const current = exam[field.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)];
+      if (field === "startsAt" || field === "endsAt") return new Date(next).getTime() === new Date(current).getTime();
+      if (["durationMinutes", "passMarks", "maxAttempts"].includes(field)) return Number(next) === Number(current);
+      return next === current;
+    };
+    const frozen = FROZEN_AFTER_ATTEMPTS.filter(
+      (field) => field in payload && !unchanged(field, payload[field])
+    );
+    if (frozen.length > 0) {
+      await assertNoAttempts(
+        id,
+        "Students have started this exam, so its timing and marking cannot change. Duplicate the exam for a corrected version."
+      );
+    }
     if (payload.status === "published") {
       const questions = await db.one("SELECT count(*)::int AS count FROM exam_questions WHERE exam_id = $1", [id]);
       if (num(questions.count) === 0) throw badRequest("Add at least one question before publishing the exam");
@@ -300,6 +327,97 @@ export function createExamsService(db, audit, notifications) {
     return getExam(id, user);
   }
 
+  /** Copy the whole paper (questions, options, keys) into a fresh draft exam. */
+  async function duplicateExam(id, user, ip) {
+    const source = await assertExamAccess(id, user);
+    const questions = await db.many(
+      `SELECT id, question_type, question_text, explanation, marks, negative_marks, sort_order
+       FROM exam_questions WHERE exam_id = $1 ORDER BY sort_order, created_at`,
+      [id]
+    );
+    const options = await db.many(
+      `SELECT o.id, o.question_id, o.option_text, o.sort_order
+       FROM exam_options o JOIN exam_questions q ON q.id = o.question_id
+       WHERE q.exam_id = $1 ORDER BY o.sort_order`,
+      [id]
+    );
+    const keys = await db.many(
+      `SELECT k.question_id, k.correct_option_id, k.model_answer
+       FROM exam_answer_keys k JOIN exam_questions q ON q.id = k.question_id
+       WHERE q.exam_id = $1`,
+      [id]
+    );
+
+    const newId = await db.transaction(async (tx) => {
+      const { rows } = await tx.query(
+        `INSERT INTO exams (batch_id, subject_id, title, description, instructions, exam_type,
+                            starts_at, ends_at, duration_minutes, total_marks, pass_marks, max_attempts,
+                            shuffle_questions, status, results_published, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'draft', false, $14)
+         RETURNING id`,
+        [
+          source.batch_id,
+          source.subject_id,
+          `${source.title} (copy)`.slice(0, 200),
+          source.description,
+          source.instructions,
+          source.exam_type,
+          source.starts_at,
+          source.ends_at,
+          source.duration_minutes,
+          source.total_marks,
+          source.pass_marks,
+          source.max_attempts,
+          source.shuffle_questions,
+          user.id
+        ]
+      );
+      const created = rows[0].id;
+
+      for (const question of questions) {
+        const inserted = await tx.one(
+          `INSERT INTO exam_questions (exam_id, question_type, question_text, explanation, marks, negative_marks, sort_order)
+           VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+          [
+            created,
+            question.question_type,
+            question.question_text,
+            question.explanation,
+            question.marks,
+            question.negative_marks,
+            question.sort_order
+          ]
+        );
+        const optionMap = new Map();
+        for (const option of options.filter((row) => row.question_id === question.id)) {
+          const copy = await tx.one(
+            "INSERT INTO exam_options (question_id, option_text, sort_order) VALUES ($1, $2, $3) RETURNING id",
+            [inserted.id, option.option_text, option.sort_order]
+          );
+          optionMap.set(option.id, copy.id);
+        }
+        const key = keys.find((row) => row.question_id === question.id);
+        await tx.query(
+          `INSERT INTO exam_answer_keys (question_id, correct_option_id, model_answer, updated_by)
+           VALUES ($1, $2, $3, $4)`,
+          [inserted.id, key?.correct_option_id ? optionMap.get(key.correct_option_id) ?? null : null, key?.model_answer ?? null, user.id]
+        );
+      }
+      return created;
+    });
+
+    await audit.record({
+      actorId: user.id,
+      actorEmail: user.email,
+      action: "exam.duplicated",
+      entityType: "exam",
+      entityId: newId,
+      metadata: { sourceExamId: id, batchId: source.batch_id },
+      ip
+    });
+    return getExam(newId, user);
+  }
+
   async function deleteExam(id, user, ip) {
     const exam = await assertExamAccess(id, user);
     const attempts = await db.one("SELECT count(*)::int AS count FROM exam_attempts WHERE exam_id = $1", [id]);
@@ -320,8 +438,8 @@ export function createExamsService(db, audit, notifications) {
     return { id };
   }
 
-  async function recalcTotal(examId) {
-    await db.query(
+  async function recalcTotal(examId, runner = db) {
+    await runner.query(
       `UPDATE exams SET total_marks = COALESCE((SELECT SUM(marks) FROM exam_questions WHERE exam_id = $1), 0),
                         pass_marks = LEAST(pass_marks, COALESCE((SELECT SUM(marks) FROM exam_questions WHERE exam_id = $1), 0)),
                         updated_at = now()
@@ -330,42 +448,61 @@ export function createExamsService(db, audit, notifications) {
     );
   }
 
+  /**
+   * Serialise paper mutations with attempt starts: starts hold a share lock on
+   * the exam row, edits hold an exclusive lock and then check for attempts. A
+   * start either sees a completed edit or the edit is rejected as frozen.
+   */
+  async function lockPaper(tx, examId, message) {
+    const exam = await tx.one("SELECT id FROM exams WHERE id = $1 FOR UPDATE", [examId]);
+    if (!exam) throw notFound("Exam not found");
+    const attempts = await tx.one("SELECT count(*)::int AS count FROM exam_attempts WHERE exam_id = $1", [examId]);
+    if (num(attempts.count) > 0) throw conflict(message);
+  }
+
   async function addQuestion(examId, payload, user, ip) {
     await assertExamAccess(examId, user);
     const type = payload.questionType ?? "mcq";
 
-    const question = await db.one(
-      `INSERT INTO exam_questions (exam_id, question_type, question_text, explanation, marks, negative_marks, sort_order)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-      [
+    const question = await db.transaction(async (tx) => {
+      await lockPaper(
+        tx,
         examId,
-        type,
-        payload.questionText,
-        nullIfEmpty(payload.explanation),
-        payload.marks,
-        type === "mcq" ? payload.negativeMarks ?? 0 : 0,
-        payload.sortOrder ?? 0
-      ]
-    );
+        "The question paper is frozen because students have started this exam. Duplicate the exam for a corrected version."
+      );
+      const inserted = await tx.one(
+        `INSERT INTO exam_questions (exam_id, question_type, question_text, explanation, marks, negative_marks, sort_order)
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+        [
+          examId,
+          type,
+          payload.questionText,
+          nullIfEmpty(payload.explanation),
+          payload.marks,
+          type === "mcq" ? payload.negativeMarks ?? 0 : 0,
+          payload.sortOrder ?? 0
+        ]
+      );
 
-    let correctOptionId = null;
-    if (type === "mcq") {
-      for (const [index, option] of (payload.options ?? []).entries()) {
-        const row = await db.one(
-          "INSERT INTO exam_options (question_id, option_text, sort_order) VALUES ($1, $2, $3) RETURNING id",
-          [question.id, option.text, index]
-        );
-        if (option.isCorrect) correctOptionId = row.id;
+      let correctOptionId = null;
+      if (type === "mcq") {
+        for (const [index, option] of (payload.options ?? []).entries()) {
+          const row = await tx.one(
+            "INSERT INTO exam_options (question_id, option_text, sort_order) VALUES ($1, $2, $3) RETURNING id",
+            [inserted.id, option.text, index]
+          );
+          if (option.isCorrect) correctOptionId = row.id;
+        }
       }
-    }
 
-    await db.query(
-      `INSERT INTO exam_answer_keys (question_id, correct_option_id, model_answer, updated_by)
-       VALUES ($1, $2, $3, $4)`,
-      [question.id, correctOptionId, nullIfEmpty(payload.modelAnswer), user.id]
-    );
-
-    await recalcTotal(examId);
+      await tx.query(
+        `INSERT INTO exam_answer_keys (question_id, correct_option_id, model_answer, updated_by)
+         VALUES ($1, $2, $3, $4)`,
+        [inserted.id, correctOptionId, nullIfEmpty(payload.modelAnswer), user.id]
+      );
+      await recalcTotal(examId, tx);
+      return inserted;
+    });
     await audit.record({
       actorId: user.id,
       actorEmail: user.email,
@@ -379,79 +516,86 @@ export function createExamsService(db, audit, notifications) {
   }
 
   async function updateQuestion(questionId, payload, user, ip) {
-    const question = await db.one("SELECT id, exam_id, question_type FROM exam_questions WHERE id = $1", [
-      questionId
-    ]);
+    const question = await db.one("SELECT id, exam_id FROM exam_questions WHERE id = $1", [questionId]);
     if (!question) throw notFound("Question not found");
     await assertExamAccess(question.exam_id, user);
 
-    // Validate the row this PATCH produces, not just the fields it mentions.
-    const nextType = payload.questionType ?? question.question_type;
-    if (nextType === "mcq" && !payload.options) {
-      const existing = await db.one("SELECT count(*)::int AS count FROM exam_options WHERE question_id = $1", [
-        questionId
-      ]);
-      if (num(existing.count) < 2) throw badRequest("An MCQ needs at least two options");
-    }
-    if (nextType === "subjective" && payload.modelAnswer === undefined) {
-      const key = await db.one("SELECT model_answer FROM exam_answer_keys WHERE question_id = $1", [questionId]);
-      if (!key?.model_answer) throw badRequest("A subjective question needs a model answer");
-    }
+    await db.transaction(async (tx) => {
+      await lockPaper(
+        tx,
+        question.exam_id,
+        "This question belongs to an exam students have started; the paper is frozen. Duplicate the exam for a corrected version."
+      );
+      const current = await tx.one("SELECT id, question_type FROM exam_questions WHERE id = $1", [questionId]);
 
-    const type = payload.questionType;
-    if (type && type !== "mcq") {
-      const responses = await db.one("SELECT count(*)::int AS count FROM exam_responses WHERE question_id = $1", [
-        questionId
-      ]);
-      if (num(responses.count) > 0) throw badRequest("This question already has student responses");
-    }
-
-    await db.query(
-      `UPDATE exam_questions SET
-         question_type = COALESCE($2, question_type),
-         question_text = COALESCE($3, question_text),
-         explanation = COALESCE($4, explanation),
-         marks = COALESCE($5, marks),
-         negative_marks = COALESCE($6, negative_marks),
-         sort_order = COALESCE($7, sort_order),
-         updated_at = now()
-       WHERE id = $1`,
-      [
-        questionId,
-        nullIfEmpty(payload.questionType),
-        nullIfEmpty(payload.questionText),
-        payload.explanation === undefined ? null : nullIfEmpty(payload.explanation),
-        payload.marks ?? null,
-        payload.negativeMarks ?? null,
-        payload.sortOrder ?? null
-      ]
-    );
-
-    if (payload.options) {
-      await db.query("DELETE FROM exam_answer_keys WHERE question_id = $1", [questionId]);
-      await db.query("DELETE FROM exam_options WHERE question_id = $1", [questionId]);
-      let correctOptionId = null;
-      for (const [index, option] of payload.options.entries()) {
-        const row = await db.one(
-          "INSERT INTO exam_options (question_id, option_text, sort_order) VALUES ($1, $2, $3) RETURNING id",
-          [questionId, option.text, index]
-        );
-        if (option.isCorrect) correctOptionId = row.id;
+      // Validate the row this PATCH produces, not just the fields it mentions.
+      const nextType = payload.questionType ?? current.question_type;
+      if (nextType === "mcq" && !payload.options) {
+        const existing = await tx.one("SELECT count(*)::int AS count FROM exam_options WHERE question_id = $1", [
+          questionId
+        ]);
+        if (num(existing.count) < 2) throw badRequest("An MCQ needs at least two options");
       }
-      await db.query(
-        `INSERT INTO exam_answer_keys (question_id, correct_option_id, model_answer, updated_by)
-         VALUES ($1, $2, $3, $4)`,
-        [questionId, correctOptionId, nullIfEmpty(payload.modelAnswer), user.id]
-      );
-    } else if (payload.modelAnswer !== undefined) {
-      await db.query(
-        `INSERT INTO exam_answer_keys (question_id, model_answer, updated_by) VALUES ($1, $2, $3)
-         ON CONFLICT (question_id) DO UPDATE SET model_answer = EXCLUDED.model_answer, updated_by = EXCLUDED.updated_by, updated_at = now()`,
-        [questionId, nullIfEmpty(payload.modelAnswer), user.id]
-      );
-    }
+      if (nextType === "subjective" && payload.modelAnswer === undefined) {
+        const key = await tx.one("SELECT model_answer FROM exam_answer_keys WHERE question_id = $1", [questionId]);
+        if (!key?.model_answer) throw badRequest("A subjective question needs a model answer");
+      }
 
-    await recalcTotal(question.exam_id);
+      const type = payload.questionType;
+      if (type && type !== "mcq") {
+        const responses = await tx.one("SELECT count(*)::int AS count FROM exam_responses WHERE question_id = $1", [
+          questionId
+        ]);
+        if (num(responses.count) > 0) throw badRequest("This question already has student responses");
+      }
+
+      await tx.query(
+        `UPDATE exam_questions SET
+           question_type = COALESCE($2, question_type),
+           question_text = COALESCE($3, question_text),
+           explanation = COALESCE($4, explanation),
+           marks = COALESCE($5, marks),
+           negative_marks = COALESCE($6, negative_marks),
+           sort_order = COALESCE($7, sort_order),
+           updated_at = now()
+         WHERE id = $1`,
+        [
+          questionId,
+          nullIfEmpty(payload.questionType),
+          nullIfEmpty(payload.questionText),
+          payload.explanation === undefined ? null : nullIfEmpty(payload.explanation),
+          payload.marks ?? null,
+          payload.negativeMarks ?? null,
+          payload.sortOrder ?? null
+        ]
+      );
+
+      if (payload.options) {
+        await tx.query("DELETE FROM exam_answer_keys WHERE question_id = $1", [questionId]);
+        await tx.query("DELETE FROM exam_options WHERE question_id = $1", [questionId]);
+        let correctOptionId = null;
+        for (const [index, option] of payload.options.entries()) {
+          const row = await tx.one(
+            "INSERT INTO exam_options (question_id, option_text, sort_order) VALUES ($1, $2, $3) RETURNING id",
+            [questionId, option.text, index]
+          );
+          if (option.isCorrect) correctOptionId = row.id;
+        }
+        await tx.query(
+          `INSERT INTO exam_answer_keys (question_id, correct_option_id, model_answer, updated_by)
+           VALUES ($1, $2, $3, $4)`,
+          [questionId, correctOptionId, nullIfEmpty(payload.modelAnswer), user.id]
+        );
+      } else if (payload.modelAnswer !== undefined) {
+        await tx.query(
+          `INSERT INTO exam_answer_keys (question_id, model_answer, updated_by) VALUES ($1, $2, $3)
+           ON CONFLICT (question_id) DO UPDATE SET model_answer = EXCLUDED.model_answer, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+          [questionId, nullIfEmpty(payload.modelAnswer), user.id]
+        );
+      }
+      await recalcTotal(question.exam_id, tx);
+    });
+
     await audit.record({
       actorId: user.id,
       actorEmail: user.email,
@@ -468,8 +612,15 @@ export function createExamsService(db, audit, notifications) {
     const question = await db.one("SELECT id, exam_id FROM exam_questions WHERE id = $1", [questionId]);
     if (!question) throw notFound("Question not found");
     await assertExamAccess(question.exam_id, user);
-    await db.query("DELETE FROM exam_questions WHERE id = $1", [questionId]);
-    await recalcTotal(question.exam_id);
+    await db.transaction(async (tx) => {
+      await lockPaper(
+        tx,
+        question.exam_id,
+        "This question belongs to an exam students have started; the paper is frozen. Duplicate the exam for a corrected version."
+      );
+      await tx.query("DELETE FROM exam_questions WHERE id = $1", [questionId]);
+      await recalcTotal(question.exam_id, tx);
+    });
     await audit.record({
       actorId: user.id,
       actorEmail: user.email,
@@ -622,6 +773,7 @@ export function createExamsService(db, audit, notifications) {
     getExam,
     createExam,
     updateExam,
+    duplicateExam,
     deleteExam,
     addQuestion,
     updateQuestion,

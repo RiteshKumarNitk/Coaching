@@ -1,11 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
+  ArrowRight,
   BookOpen,
   CalendarDays,
   ClipboardList,
   Clock,
+  FileText,
   Megaphone,
+  PlayCircle,
   Receipt,
   RefreshCw,
   Target,
@@ -20,7 +23,7 @@ import { ErrorState } from "../../components/ErrorState.jsx";
 import { EmptyState } from "../../components/EmptyState.jsx";
 import { DashboardSkeleton } from "../../components/Skeleton.jsx";
 import { Badge } from "../../components/Badge.jsx";
-import { formatCurrency, formatDate, formatDateTime, formatTimeRange, greeting } from "../../utils/format.js";
+import { formatCurrency, formatDate, formatDateTime, formatTimeRange, greeting, relativeDay } from "../../utils/format.js";
 
 function ScoreRow({ result }) {
   const percentage = Math.max(0, Math.min(100, Number(result.percentage ?? 0)));
@@ -64,11 +67,29 @@ export function StudentDashboard() {
 
   if (isError) return <ErrorState error={error} onRetry={refetch} />;
 
-  const { student, enrollment, todaySchedule, announcements, upcomingExams, recentResults, attendance, fees, unreadNotifications } =
-    data;
+  const {
+    student,
+    enrollment,
+    announcements,
+    upcomingExams,
+    recentResults,
+    attendance,
+    fees,
+    unreadNotifications,
+    resumeLesson,
+    nextClass,
+    pendingAssignments,
+    pendingAssignmentsTotal
+  } = data;
   const firstName = (student.fullName ?? user?.fullName ?? "Student").split(" ")[0];
   const feePaidPercent = fees.total > 0 ? Math.round((fees.paid / fees.total) * 100) : 0;
   const attendancePercent = attendance.percentage;
+  const resumeMinutes = resumeLesson ? Math.floor(resumeLesson.lastPositionSeconds / 60) : 0;
+  const nextRoom = nextClass?.room
+    ? /^room\b/i.test(nextClass.room)
+      ? nextClass.room
+      : `Room ${nextClass.room}`
+    : "Room to be announced";
 
   return (
     <>
@@ -109,72 +130,118 @@ export function StudentDashboard() {
         </div>
       ) : null}
 
-      <SectionCard
-        title="Today"
-        subtitle={formatDate(new Date(), { weekday: "long", day: "numeric", month: "long" })}
-        action={
-          <button
-            type="button"
-            className="icon-btn"
-            onClick={() => refetch()}
-            aria-label="Refresh dashboard"
-            disabled={isFetching}
-            style={{ width: 34, height: 34 }}
-          >
-            <RefreshCw size={15} aria-hidden="true" />
-          </button>
-        }
-      >
-        {todaySchedule.length === 0 ? (
-          <EmptyState icon={CalendarDays} title="No classes today" description="Enjoy the break — your next class appears here." />
-        ) : (
-          <ul className="list">
-            {todaySchedule.map((slot, index) => (
-              <li className="list__item" key={`${slot.subject_name}-${index}`}>
-                <span className="list__icon" aria-hidden="true">
-                  <Clock size={16} />
+      <div className="grid-2">
+        <SectionCard
+          title="Resume learning"
+          subtitle="Your next published lesson"
+          action={
+            <Link className="btn btn--ghost btn--sm" to="/student/courses">
+              Learn
+            </Link>
+          }
+        >
+          {resumeLesson ? (
+            <Link className="resume-card" to={`/student/lectures/${resumeLesson.id}`}>
+              <span className="list__icon" aria-hidden="true">
+                <PlayCircle size={17} />
+              </span>
+              <span className="resume-card__main">
+                <span className="resume-card__subject">{resumeLesson.subjectName}</span>
+                <strong>{resumeLesson.title}</strong>
+                <span className="small muted">
+                  {resumeLesson.progressPercent > 0
+                    ? `${resumeLesson.progressPercent}% watched${resumeMinutes > 0 ? ` · resume at ${resumeMinutes} min` : ""}`
+                    : resumeLesson.durationMinutes
+                      ? `${resumeLesson.durationMinutes} min ${resumeLesson.hasVideo ? "video" : "lesson · PDF notes"}`
+                      : resumeLesson.hasVideo
+                        ? "Video lesson"
+                        : "PDF notes"}
                 </span>
-                <div className="list__main">
-                  <p className="list__title">{slot.subject_name ?? "Class"}</p>
-                  <p className="list__meta">{slot.room ? `Room ${slot.room}` : "Room to be announced"}</p>
-                </div>
-                <span className="list__side">{formatTimeRange(slot.start_time, slot.end_time)}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </SectionCard>
+              </span>
+              <span className="resume-card__action">
+                {resumeLesson.progressPercent > 0 ? "Resume" : "Start"} <ArrowRight size={14} aria-hidden="true" />
+              </span>
+            </Link>
+          ) : (
+            <EmptyState
+              icon={BookOpen}
+              title="No lesson waiting"
+              description="Published lessons for your batch will appear here."
+            />
+          )}
+        </SectionCard>
+
+        <SectionCard
+          title="Next class"
+          subtitle={nextClass ? nextClass.batchName : "Your batch timetable"}
+          action={
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => refetch()}
+              aria-label="Refresh dashboard"
+              disabled={isFetching}
+              style={{ width: 34, height: 34 }}
+            >
+              <RefreshCw size={15} aria-hidden="true" />
+            </button>
+          }
+        >
+          {nextClass ? (
+            <div className="next-class">
+              <span className="next-class__day">
+                <span className="eyebrow">{relativeDay(nextClass.nextDate)}</span>
+                <strong>{formatDate(nextClass.nextDate, { weekday: "long", day: "numeric", month: "short" })}</strong>
+              </span>
+              <div className="next-class__details">
+                <p className="list__title">{nextClass.subjectName ?? "Class"}</p>
+                <p className="list__meta">{nextRoom}</p>
+                <p className="small muted">
+                  <Clock size={13} aria-hidden="true" style={{ display: "inline", verticalAlign: "-2px", marginRight: 4 }} />
+                  {formatTimeRange(nextClass.startTime, nextClass.endTime)}
+                </p>
+              </div>
+            </div>
+          ) : (
+            <EmptyState
+              icon={CalendarDays}
+              title="No upcoming class"
+              description="The batch timetable will appear here once it is scheduled."
+            />
+          )}
+        </SectionCard>
+      </div>
 
       <div className="grid-2">
-        <SectionCard title="Attendance" subtitle="All recorded sessions">
-          <div className="metric-block">
-            <div className="stat-line">
-              <span className="muted small">Overall</span>
-              <strong>{attendancePercent === null ? "—" : `${attendancePercent}%`}</strong>
-            </div>
-            <div className="progress" aria-hidden="true">
-              <div
-                className={`progress__bar${attendancePercent !== null && attendancePercent >= 75 ? " progress__bar--success" : ""}`}
-                style={{ width: `${attendancePercent ?? 0}%` }}
-              />
-            </div>
-            <div className="metric-block__row">
-              <span>Present</span>
-              <strong>{attendance.present} days</strong>
-            </div>
-            <div className="metric-block__row">
-              <span>Absent</span>
-              <strong>{attendance.absent} days</strong>
-            </div>
-            <hr className="divider" />
-            <div className="metric-block__row">
-              <span>This month</span>
-              <strong>
-                {attendance.thisMonth.percentage === null ? "—" : `${attendance.thisMonth.percentage}%`} ({attendance.thisMonth.present}/
-                {attendance.thisMonth.total})
-              </strong>
-            </div>
-          </div>
+        <SectionCard
+          title="Pending assignments"
+          subtitle={pendingAssignmentsTotal > 0 ? `${pendingAssignmentsTotal} to complete` : "Nothing due right now"}
+          action={
+            <Link className="btn btn--ghost btn--sm" to="/student/assignments">
+              All assignments
+            </Link>
+          }
+        >
+          {pendingAssignments.length === 0 ? (
+            <EmptyState icon={ClipboardList} title="All caught up" description="New work from your teachers will appear here." />
+          ) : (
+            <ul className="list">
+              {pendingAssignments.map((assignment) => (
+                <li className="list__item" key={assignment.id}>
+                  <span className="list__icon" aria-hidden="true">
+                    <FileText size={16} />
+                  </span>
+                  <div className="list__main">
+                    <p className="list__title">{assignment.title}</p>
+                    <p className="list__meta">
+                      {assignment.subjectName} · {assignment.maxMarks} marks
+                    </p>
+                  </div>
+                  <span className="list__side">{assignment.dueAt ? formatDateTime(assignment.dueAt) : "No due date"}</span>
+                </li>
+              ))}
+            </ul>
+          )}
         </SectionCard>
 
         <SectionCard
@@ -256,7 +323,7 @@ export function StudentDashboard() {
 
         <SectionCard title="Recent results" subtitle="Published by your teachers">
           {recentResults.length === 0 ? (
-            <EmptyState icon={TrendingUp} title="No results yet" description="Results appear after a test is evaluated and published." />
+            <EmptyState icon={TrendingUp} title="No results yet" description="Results appear after your teacher publishes them." />
           ) : (
             <ul className="list">
               {recentResults.map((result) => (
@@ -296,36 +363,69 @@ export function StudentDashboard() {
         )}
       </SectionCard>
 
-      <SectionCard title="My course" subtitle="Enrolment details">
-        {enrollment ? (
-          <div className="detail-list">
-            <div className="detail-row">
-              <dt>Course</dt>
-              <dd>
-                {enrollment.course_name} ({enrollment.course_code})
-              </dd>
+      <div className="grid-2">
+        <SectionCard title="Attendance" subtitle="All recorded sessions">
+          <div className="metric-block">
+            <div className="stat-line">
+              <span className="muted small">Overall</span>
+              <strong>{attendancePercent === null ? "—" : `${attendancePercent}%`}</strong>
             </div>
-            <div className="detail-row">
-              <dt>Batch</dt>
-              <dd>
-                {enrollment.batch_name} ({enrollment.batch_code})
-              </dd>
+            <div className="progress" aria-hidden="true">
+              <div
+                className={`progress__bar${attendancePercent !== null && attendancePercent >= 75 ? " progress__bar--success" : ""}`}
+                style={{ width: `${attendancePercent ?? 0}%` }}
+              />
             </div>
-            <div className="detail-row">
-              <dt>Batch duration</dt>
-              <dd>
-                {formatDate(enrollment.start_date)} – {formatDate(enrollment.end_date)}
-              </dd>
+            <div className="metric-block__row">
+              <span>Present</span>
+              <strong>{attendance.present} days</strong>
             </div>
-            <div className="detail-row">
-              <dt>Enrolled on</dt>
-              <dd>{formatDate(enrollment.enrolled_at)}</dd>
+            <div className="metric-block__row">
+              <span>Absent</span>
+              <strong>{attendance.absent} days</strong>
+            </div>
+            <hr className="divider" />
+            <div className="metric-block__row">
+              <span>This month</span>
+              <strong>
+                {attendance.thisMonth.percentage === null ? "—" : `${attendance.thisMonth.percentage}%`} (
+                {attendance.thisMonth.present}/{attendance.thisMonth.total})
+              </strong>
             </div>
           </div>
-        ) : (
-          <EmptyState icon={Target} title="No course assigned" description="The office will enrol you in a batch shortly." />
-        )}
-      </SectionCard>
+        </SectionCard>
+
+        <SectionCard title="My course" subtitle="Enrolment details">
+          {enrollment ? (
+            <div className="detail-list">
+              <div className="detail-row">
+                <dt>Course</dt>
+                <dd>
+                  {enrollment.course_name} ({enrollment.course_code})
+                </dd>
+              </div>
+              <div className="detail-row">
+                <dt>Batch</dt>
+                <dd>
+                  {enrollment.batch_name} ({enrollment.batch_code})
+                </dd>
+              </div>
+              <div className="detail-row">
+                <dt>Batch duration</dt>
+                <dd>
+                  {formatDate(enrollment.start_date)} – {formatDate(enrollment.end_date)}
+                </dd>
+              </div>
+              <div className="detail-row">
+                <dt>Enrolled on</dt>
+                <dd>{formatDate(enrollment.enrolled_at)}</dd>
+              </div>
+            </div>
+          ) : (
+            <EmptyState icon={Target} title="No course assigned" description="The office will enrol you in a batch shortly." />
+          )}
+        </SectionCard>
+      </div>
 
       <p className="small muted" style={{ textAlign: "center", paddingBottom: 6 }}>
         <Wallet size={12} aria-hidden="true" style={{ display: "inline", verticalAlign: "-1px" }} /> Fee receipts are issued

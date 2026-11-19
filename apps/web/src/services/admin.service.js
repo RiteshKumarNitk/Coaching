@@ -17,7 +17,11 @@ export const adminService = {
   createStudent: (payload) => api.post("/api/admin/students", payload),
   updateStudent: (id, payload) => api.patch(`/api/admin/students/${id}`, payload),
   setStudentStatus: (id, status) => api.post(`/api/admin/students/${id}/status`, { status }),
-  enrollStudent: (id, batchId) => api.post(`/api/admin/students/${id}/enrollment`, { batchId }),
+  enrollStudent: (id, payload) => api.post(`/api/admin/students/${id}/enrollment`, payload),
+  closeEnrollment: (id, enrollmentId, payload) =>
+    api.post(`/api/admin/students/${id}/enrollment/${enrollmentId}/close`, payload),
+  transferEnrollment: (id, enrollmentId, payload) =>
+    api.post(`/api/admin/students/${id}/enrollment/${enrollmentId}/transfer`, payload),
   unenrollStudent: (id, enrollmentId) => api.del(`/api/admin/students/${id}/enrollment/${enrollmentId}`),
   resetStudentPassword: (id) => api.post(`/api/admin/students/${id}/reset-password`, {}),
   grantGuardianAccess: (id, payload) => api.post(`/api/admin/students/${id}/guardian-access`, payload),

@@ -1,6 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, FileText } from "lucide-react";
+import {
+  ArrowLeft,
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  ExternalLink,
+  FileText,
+  PlayCircle,
+  Video
+} from "lucide-react";
 import { studentService } from "../../services/student.service.js";
 import { useDocumentTitle } from "../../hooks/useDocumentTitle.js";
 import { SectionCard } from "../../components/SectionCard.jsx";
@@ -10,9 +19,25 @@ import { ErrorState } from "../../components/ErrorState.jsx";
 import { DashboardSkeleton } from "../../components/Skeleton.jsx";
 import { formatDate } from "../../utils/format.js";
 
+const kindLabel = {
+  notes: "PDF notes",
+  assignment: "Assignment PDF",
+  reference: "Reference PDF",
+  other: "File"
+};
+
+const isHttpLink = (value) => typeof value === "string" && /^https?:\/\//i.test(value);
+
+function formatPosition(seconds) {
+  const total = Math.max(0, Math.floor(Number(seconds) || 0));
+  const minutes = Math.floor(total / 60);
+  const remainder = total % 60;
+  return `${minutes}:${String(remainder).padStart(2, "0")}`;
+}
+
 export function StudentLessonPage() {
   const { id } = useParams();
-  useDocumentTitle("Lecture");
+  useDocumentTitle("Lesson");
   const queryClient = useQueryClient();
 
   const lessonQuery = useQuery({ queryKey: ["student", "lesson", id], queryFn: () => studentService.lesson(id) });
@@ -25,6 +50,7 @@ export function StudentLessonPage() {
       );
       queryClient.invalidateQueries({ queryKey: ["student", "lessons"] });
       queryClient.invalidateQueries({ queryKey: ["student", "courses"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard", "student"] });
     }
   });
 
@@ -32,17 +58,42 @@ export function StudentLessonPage() {
   if (lessonQuery.isError) return <ErrorState error={lessonQuery.error} onRetry={lessonQuery.refetch} />;
 
   const { lesson, progress, materials, previousLessonId, nextLessonId } = lessonQuery.data;
+  const resumeSeconds = progress.completed ? 0 : progress.lastPositionSeconds;
+  const resumeUrl = resumeSeconds > 0 ? `?start=${Math.floor(resumeSeconds)}` : "";
 
   return (
     <>
-      <Link className="back-link" to="/student/lectures">
-        <ArrowLeft size={14} /> All lectures
+      <Link className="back-link" to={`/student/lectures?batch=${lesson.batchId}&subject=${lesson.subjectId}`}>
+        <ArrowLeft size={14} /> Back to lessons
       </Link>
+
+      <div className="row row--wrap" style={{ gap: 6 }}>
+        <Badge tone="brand">
+          <Video size={11} aria-hidden="true" /> YouTube lesson
+        </Badge>
+        <Badge tone={materials.length > 0 ? "info" : "neutral"}>
+          <FileText size={11} aria-hidden="true" /> {materials.length} PDF / note{materials.length === 1 ? "" : "s"}
+        </Badge>
+        {progress.completed ? (
+          <Badge tone="success">
+            <CheckCircle2 size={11} aria-hidden="true" /> Completed
+          </Badge>
+        ) : null}
+      </div>
+
+      {resumeSeconds > 0 && !progress.completed ? (
+        <div className="alert alert--info" role="status">
+          <PlayCircle size={16} aria-hidden="true" />
+          <span>
+            Resume from {formatPosition(resumeSeconds)}. The player starts at your last saved position.
+          </span>
+        </div>
+      ) : null}
 
       {lesson.youtubeVideoId ? (
         <div className="video-frame">
           <iframe
-            src={`https://www.youtube-nocookie.com/embed/${lesson.youtubeVideoId}`}
+            src={`https://www.youtube-nocookie.com/embed/${lesson.youtubeVideoId}${resumeUrl}`}
             title={lesson.title}
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
             referrerPolicy="strict-origin-when-cross-origin"
@@ -51,7 +102,11 @@ export function StudentLessonPage() {
         </div>
       ) : (
         <SectionCard>
-          <EmptyState icon={FileText} title="Video not attached" description="Your teacher has not linked a video for this lecture yet." />
+          <EmptyState
+            icon={Video}
+            title="Video unavailable"
+            description="Your teacher has not attached a working YouTube video to this lesson. Use the PDF notes below or ask your teacher to add the link."
+          />
         </SectionCard>
       )}
 
@@ -95,9 +150,9 @@ export function StudentLessonPage() {
         </div>
       </SectionCard>
 
-      <SectionCard title="Notes for this subject" subtitle="Shared by your teacher">
+      <SectionCard title="Attached PDFs and notes" subtitle={`Shared for ${lesson.subjectName}`}>
         {materials.length === 0 ? (
-          <EmptyState icon={FileText} title="No notes yet" description="Study material for this subject appears here." />
+          <EmptyState icon={FileText} title="No PDFs yet" description="Notes for this subject will appear here." />
         ) : (
           <ul className="list">
             {materials.map((material) => (
@@ -108,13 +163,17 @@ export function StudentLessonPage() {
                 <div className="list__main">
                   <p className="list__title">{material.title}</p>
                   <p className="list__meta">
-                    {material.kind}
+                    {kindLabel[material.kind] ?? "File"}
                     {material.chapter ? ` · ${material.chapter}` : ""}
                   </p>
                 </div>
-                <a className="btn btn--ghost btn--sm" href={material.driveUrl} target="_blank" rel="noreferrer noopener">
-                  <ExternalLink size={13} /> Open
-                </a>
+                {isHttpLink(material.driveUrl) ? (
+                  <a className="btn btn--ghost btn--sm" href={material.driveUrl} target="_blank" rel="noreferrer noopener">
+                    <ExternalLink size={13} /> Open PDF
+                  </a>
+                ) : (
+                  <span className="badge badge--danger">Link unavailable</span>
+                )}
               </li>
             ))}
           </ul>
@@ -124,14 +183,14 @@ export function StudentLessonPage() {
       <div className="row row--between" style={{ gap: 8 }}>
         {previousLessonId ? (
           <Link className="btn btn--ghost btn--sm" to={`/student/lectures/${previousLessonId}`}>
-            <ChevronLeft size={14} /> Previous
+            <ChevronLeft size={14} /> Previous lesson
           </Link>
         ) : (
           <span />
         )}
         {nextLessonId ? (
           <Link className="btn btn--primary btn--sm" to={`/student/lectures/${nextLessonId}`}>
-            Next lecture <ChevronRight size={14} />
+            Next lesson <ChevronRight size={14} />
           </Link>
         ) : null}
       </div>

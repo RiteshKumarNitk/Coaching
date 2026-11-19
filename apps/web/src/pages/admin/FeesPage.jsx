@@ -27,6 +27,38 @@ const TABS = [
   { id: "reminders", label: "Reminders" }
 ];
 
+// An unconfirmed payment must survive closing the dialog and a page refresh.
+// sessionStorage is tab-scoped: another clerk or a different browser cannot inherit
+// the key, and the key is removed as soon as the server confirms the receipt.
+const pendingPaymentKey = (feeId) => `coaching.pendingPayment.${feeId}`;
+
+function readPendingPayment(feeId) {
+  try {
+    const raw = globalThis.sessionStorage?.getItem(pendingPaymentKey(feeId));
+    const value = raw ? JSON.parse(raw) : null;
+    if (!value?.requestId || !value?.form) return null;
+    return value;
+  } catch {
+    return null;
+  }
+}
+
+function writePendingPayment(feeId, value) {
+  try {
+    globalThis.sessionStorage?.setItem(pendingPaymentKey(feeId), JSON.stringify(value));
+  } catch {
+    // Storage can be disabled by the browser; the in-memory key still works.
+  }
+}
+
+function clearPendingPayment(feeId) {
+  try {
+    globalThis.sessionStorage?.removeItem(pendingPaymentKey(feeId));
+  } catch {
+    // Nothing to clean up when storage is unavailable.
+  }
+}
+
 export function FeesPage() {
   useDocumentTitle("Fees");
   const queryClient = useQueryClient();
@@ -36,6 +68,10 @@ export function FeesPage() {
 
   const [payingFee, setPayingFee] = useState(null);
   const [paymentForm, setPaymentForm] = useState({ amount: "", method: "cash", reference: "", notes: "" });
+  // One idempotency key per payment action: retrying a failed save reuses it, so a
+  // double submit cannot create a second receipt.
+  const [paymentRequestId, setPaymentRequestId] = useState(null);
+  const [paymentNotice, setPaymentNotice] = useState(null);
   const [waivingFee, setWaivingFee] = useState(null);
   const [waiveReason, setWaiveReason] = useState("");
   const [voidingPayment, setVoidingPayment] = useState(null);
@@ -68,8 +104,9 @@ export function FeesPage() {
 
   const duesQuery = useQuery({
     queryKey: ["admin", "fees", "dues", page],
-    queryFn: () => feeService.dues({ page, pageSize: 20 }),
-    enabled: tab === "dues"
+    queryFn: () => feeService.dues({ page, pageSize: 20 })
+    // Keep the summary subscription alive on Receipts/Structures so a payment or
+    // void refreshes the cards that stay visible above the tabs.
   });
 
   const structuresQuery = useQuery({
@@ -136,16 +173,55 @@ export function FeesPage() {
   };
 
   const invalidateFees = () => {
-    queryClient.invalidateQueries({ queryKey: ["admin", "fees"] });
-    queryClient.invalidateQueries({ queryKey: ["dashboard", "admin"] });
+    // The summary cards stay mounted on every tab, while dues and receipts live in
+    // inactive queries. Refetch all matching queries so the visible totals cannot
+    // keep showing the pre-payment amount.
+    queryClient.invalidateQueries({ queryKey: ["admin", "fees"], refetchType: "all" });
+    queryClient.invalidateQueries({ queryKey: ["admin", "student"], refetchType: "all" });
+    queryClient.invalidateQueries({ queryKey: ["dashboard", "admin"], refetchType: "all" });
   };
 
+  const paymentVariables = () => ({
+    feeId: payingFee.id,
+    payload: {
+      ...paymentForm,
+      amount: Number(paymentForm.amount),
+      requestId: paymentRequestId
+    },
+    form: { ...paymentForm }
+  });
+
   const paymentMutation = useMutation({
-    mutationFn: () => feeService.recordPayment(payingFee.id, { ...paymentForm, amount: Number(paymentForm.amount) }),
-    onSuccess: () => {
+    mutationFn: ({ feeId, payload }) => feeService.recordPayment(feeId, payload),
+    onMutate: ({ feeId, payload, form }) => {
+      writePendingPayment(feeId, { requestId: payload.requestId, form });
+    },
+    onSuccess: (_data, { feeId }) => {
+      clearPendingPayment(feeId);
       setPayingFee(null);
+      setPaymentRequestId(null);
+      setPaymentNotice(null);
       setPaymentForm({ amount: "", method: "cash", reference: "", notes: "" });
       invalidateFees();
+    },
+    onError: (error, { feeId }) => {
+      if (error.status === 409) {
+        // The key exists on the server, so the earlier attempt was committed. Keep
+        // the key so correcting the details retrieves that receipt instead of
+        // creating a second payment.
+        setPaymentNotice(
+          "The earlier payment was recorded with different details. Restore its original details to retrieve that receipt."
+        );
+        invalidateFees();
+        return;
+      }
+      if (error.status !== 0 && error.status < 500) {
+        // A definitive validation failure stored nothing; there is no pending
+        // request to protect when the dialog is reopened.
+        clearPendingPayment(feeId);
+        setPaymentNotice(null);
+      }
+      if (error.status === 0 || error.status >= 500) invalidateFees();
     }
   });
 
@@ -321,7 +397,20 @@ export function FeesPage() {
                       disabled={row.pendingAmount <= 0 || row.status === "waived"}
                       onClick={() => {
                         paymentMutation.reset();
-                        setPaymentForm({ amount: String(row.pendingAmount), method: "cash", reference: "", notes: "" });
+                        const pending = readPendingPayment(row.id);
+                        if (pending) {
+                          setPaymentRequestId(pending.requestId);
+                          setPaymentForm({ ...pending.form });
+                          setPaymentNotice(
+                            "A previous payment for this invoice was not confirmed. Retry with the same details to check its status."
+                          );
+                        } else {
+                          setPaymentRequestId(
+                            globalThis.crypto?.randomUUID?.() ?? `pay-${Date.now()}-${Math.random().toString(36).slice(2)}`
+                          );
+                          setPaymentForm({ amount: String(row.pendingAmount), method: "cash", reference: "", notes: "" });
+                          setPaymentNotice(null);
+                        }
                         setPayingFee(row);
                       }}
                     >
@@ -454,26 +543,43 @@ export function FeesPage() {
         open={Boolean(payingFee)}
         title="Record payment"
         description={payingFee ? `${payingFee.fullName} · pending ${formatCurrency(payingFee.pendingAmount)}` : undefined}
-        onClose={() => setPayingFee(null)}
+        onClose={() => {
+          setPayingFee(null);
+          setPaymentNotice(null);
+        }}
         footer={
           <>
-            <button type="button" className="btn btn--ghost" onClick={() => setPayingFee(null)}>
+            <button
+              type="button"
+              className="btn btn--ghost"
+              onClick={() => {
+                setPayingFee(null);
+                setPaymentNotice(null);
+              }}
+            >
               Cancel
             </button>
             <button
               type="button"
               className="btn btn--primary"
               disabled={paymentMutation.isPending || !paymentForm.amount}
-              onClick={() => paymentMutation.mutate()}
+              onClick={() => paymentMutation.mutate(paymentVariables())}
             >
               {paymentMutation.isPending ? "Saving…" : "Save receipt"}
             </button>
           </>
         }
       >
+        {paymentNotice ? (
+          <div className="alert alert--info" role="note" style={{ marginBottom: 12 }}>
+            {paymentNotice}
+          </div>
+        ) : null}
         {paymentMutation.isError ? (
           <div className="alert alert--error" role="alert" style={{ marginBottom: 12 }}>
-            {paymentMutation.error.message}
+            {paymentMutation.error.status === 0 || paymentMutation.error.status >= 500
+              ? "Payment status could not be confirmed. Retry with the same details to check."
+              : paymentMutation.error.message}
           </div>
         ) : null}
         <div className="form-grid">

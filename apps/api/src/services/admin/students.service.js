@@ -138,11 +138,15 @@ export function createStudentsService(db, audit) {
         [id]
       ),
       db.many(
-        `SELECT e.id, e.status, e.enrolled_at, b.id AS batch_id, b.name AS batch_name, b.code AS batch_code,
-                c.id AS course_id, c.name AS course_name
+        `SELECT e.id, e.status, e.enrolled_at, e.valid_from, e.valid_until, e.ended_at, e.end_reason,
+                e.transfer_to_enrollment_id, b.id AS batch_id, b.name AS batch_name, b.code AS batch_code,
+                c.id AS course_id, c.name AS course_name,
+                target_batch.name AS transfer_to_batch_name, target_batch.code AS transfer_to_batch_code
          FROM enrollments e
          JOIN batches b ON b.id = e.batch_id
          JOIN courses c ON c.id = e.course_id
+         LEFT JOIN enrollments target_enrollment ON target_enrollment.id = e.transfer_to_enrollment_id
+         LEFT JOIN batches target_batch ON target_batch.id = target_enrollment.batch_id
          WHERE e.student_id = $1
          ORDER BY e.status = 'active' DESC, e.enrolled_at DESC`,
         [id]
@@ -205,6 +209,13 @@ export function createStudentsService(db, audit) {
         id: enrollment.id,
         status: enrollment.status,
         enrolledAt: enrollment.enrolled_at,
+        validFrom: enrollment.valid_from,
+        validUntil: enrollment.valid_until,
+        endedAt: enrollment.ended_at,
+        endReason: enrollment.end_reason,
+        transferToEnrollmentId: enrollment.transfer_to_enrollment_id,
+        transferToBatchName: enrollment.transfer_to_batch_name ?? null,
+        transferToBatchCode: enrollment.transfer_to_batch_code ?? null,
         batchId: enrollment.batch_id,
         batchName: enrollment.batch_name,
         batchCode: enrollment.batch_code,
@@ -389,17 +400,22 @@ export function createStudentsService(db, audit) {
     return { id, status };
   }
 
-  async function assignEnrollment(id, batchId, actor, ip) {
+  async function assignEnrollment(id, { batchId, validFrom, validUntil }, actor, ip) {
     const student = await db.one("SELECT user_id FROM student_profiles WHERE user_id = $1", [id]);
     if (!student) throw notFound("Student not found");
 
-    await db.transaction(async (tx) => {
+    const enrollment = await db.transaction(async (tx) => {
       const batch = await loadBatch(tx, batchId);
-      await tx.query(
-        `INSERT INTO enrollments (student_id, batch_id, course_id, status, created_by)
-         VALUES ($1, $2, $3, 'active', $4)
-         ON CONFLICT (student_id, batch_id) DO UPDATE SET status = 'active'`,
-        [id, batch.id, batch.course_id, actor.id]
+      // Re-enrolment reuses the one row allowed by (student, batch), clearing the
+      // lifecycle fields but never touching results, submissions or invoices.
+      return tx.one(
+        `INSERT INTO enrollments (student_id, batch_id, course_id, status, created_by, valid_from, valid_until)
+         VALUES ($1, $2, $3, 'active', $4, COALESCE($5::date, institute_today()), $6::date)
+         ON CONFLICT (student_id, batch_id) DO UPDATE SET
+           status = 'active', valid_from = EXCLUDED.valid_from, valid_until = EXCLUDED.valid_until,
+           ended_at = NULL, end_reason = NULL, transfer_to_enrollment_id = NULL
+         RETURNING id, valid_from, valid_until`,
+        [id, batch.id, batch.course_id, actor.id, nullIfEmpty(validFrom), nullIfEmpty(validUntil)]
       );
     });
 
@@ -408,24 +424,99 @@ export function createStudentsService(db, audit) {
       actorEmail: actor.email,
       action: "student.enrolled",
       entityType: "enrollment",
-      entityId: id,
-      metadata: { batchId },
+      entityId: enrollment.id,
+      metadata: { studentId: id, batchId, validFrom: enrollment.valid_from, validUntil: enrollment.valid_until },
+      ip
+    });
+    return getById(id);
+  }
+
+  async function closeEnrollment(id, enrollmentId, { status, reason }, actor, ip) {
+    await db.transaction(async (tx) => {
+      const enrollment = await tx.one(
+        "SELECT id, student_id, status FROM enrollments WHERE id = $1 FOR UPDATE",
+        [enrollmentId]
+      );
+      if (!enrollment || enrollment.student_id !== id) throw notFound("Enrolment not found");
+      if (enrollment.status !== "active") throw conflict("This enrolment is already closed");
+      await tx.query(
+        `UPDATE enrollments SET status = $2, ended_at = now(), end_reason = $3
+         WHERE id = $1`,
+        [enrollmentId, status, nullIfEmpty(reason)]
+      );
+    });
+    await audit.record({
+      actorId: actor.id,
+      actorEmail: actor.email,
+      action: status === "completed" ? "student.enrollment_completed" : "student.withdrawn",
+      entityType: "enrollment",
+      entityId: enrollmentId,
+      metadata: { studentId: id, status, reason: nullIfEmpty(reason) },
       ip
     });
     return getById(id);
   }
 
   async function removeEnrollment(id, enrollmentId, actor, ip) {
-    const enrollment = await db.one("SELECT id, student_id FROM enrollments WHERE id = $1", [enrollmentId]);
-    if (!enrollment || enrollment.student_id !== id) throw notFound("Enrolment not found");
-    await db.query("DELETE FROM enrollments WHERE id = $1", [enrollmentId]);
+    // Remove used to delete the row and its history. It now withdraws instead.
+    return closeEnrollment(id, enrollmentId, { status: "dropped", reason: "Withdrawn" }, actor, ip);
+  }
+
+  async function transferEnrollment(id, enrollmentId, payload, actor, ip) {
+    const target = await db.transaction(async (tx) => {
+      const source = await tx.one(
+        `SELECT id, student_id, batch_id, course_id, status, valid_until
+         FROM enrollments WHERE id = $1 FOR UPDATE`,
+        [enrollmentId]
+      );
+      if (!source || source.student_id !== id) throw notFound("Enrolment not found");
+      if (source.status !== "active") throw conflict("Only an active enrolment can be transferred");
+      if (source.batch_id === payload.batchId) throw badRequest("Choose a different batch to transfer into");
+
+      const batch = await loadBatch(tx, payload.batchId);
+      const duplicate = await tx.one(
+        "SELECT id FROM enrollments WHERE student_id = $1 AND batch_id = $2",
+        [id, batch.id]
+      );
+      if (duplicate) throw conflict("The student already has an enrolment in that batch");
+
+      const created = await tx.one(
+        `INSERT INTO enrollments (student_id, batch_id, course_id, status, created_by, valid_from, valid_until)
+         VALUES ($1, $2, $3, 'active', $4, COALESCE($5::date, institute_today()), COALESCE($6::date, $7::date))
+         RETURNING id, batch_id, course_id, valid_from, valid_until`,
+        [
+          id,
+          batch.id,
+          batch.course_id,
+          actor.id,
+          nullIfEmpty(payload.validFrom),
+          nullIfEmpty(payload.validUntil),
+          source.valid_until
+        ]
+      );
+      await tx.query(
+        `UPDATE enrollments SET status = 'transferred', ended_at = now(),
+                end_reason = COALESCE($2, 'Transfer'), transfer_to_enrollment_id = $3
+         WHERE id = $1`,
+        [source.id, nullIfEmpty(payload.reason), created.id]
+      );
+      return { created, source, batch };
+    });
+
     await audit.record({
       actorId: actor.id,
       actorEmail: actor.email,
-      action: "student.unenrolled",
+      action: "student.transferred",
       entityType: "enrollment",
-      entityId: enrollmentId,
-      metadata: { studentId: id },
+      entityId: target.created.id,
+      metadata: {
+        studentId: id,
+        fromEnrollmentId: enrollmentId,
+        fromBatchId: target.source.batch_id,
+        toBatchId: target.created.batch_id,
+        sameCourse: target.source.course_id === target.created.course_id,
+        feesMoved: false
+      },
       ip
     });
     return getById(id);
@@ -642,6 +733,8 @@ export function createStudentsService(db, audit) {
     update,
     changeStatus,
     assignEnrollment,
+    closeEnrollment,
+    transferEnrollment,
     removeEnrollment,
     resetPassword,
     grantGuardianAccess,

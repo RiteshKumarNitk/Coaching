@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, CheckCircle2, ClipboardList, Plus, Trash2 } from "lucide-react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { ArrowLeft, CheckCircle2, ClipboardList, Copy, Plus, Trash2 } from "lucide-react";
 import { examService } from "../../services/exams.service.js";
 import { useDocumentTitle } from "../../hooks/useDocumentTitle.js";
 import { SectionCard } from "../../components/SectionCard.jsx";
@@ -32,6 +32,7 @@ const blankQuestion = {
 export function ExamDetailPage({ service = examService, scope = "admin", basePath = "/admin" }) {
   const { id } = useParams();
   useDocumentTitle("Exam");
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
 
   const examQuery = useQuery({ queryKey: [scope, "exam", id], queryFn: () => service.get(id) });
@@ -84,6 +85,14 @@ export function ExamDetailPage({ service = examService, scope = "admin", basePat
   const publishMutation = useMutation({
     mutationFn: () => service.publishResults(id),
     onSuccess: invalidate
+  });
+
+  const duplicateMutation = useMutation({
+    mutationFn: () => service.duplicate(id),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: [scope, "exams"] });
+      navigate(`${basePath}/exams/${data.exam.id}`);
+    }
   });
 
   const responsesQuery = useQuery({
@@ -213,6 +222,14 @@ export function ExamDetailPage({ service = examService, scope = "admin", basePat
         >
           {publishMutation.isPending ? "Publishing…" : "Publish results"}
         </button>
+        <button
+          type="button"
+          className="btn btn--ghost btn--sm"
+          disabled={duplicateMutation.isPending}
+          onClick={() => duplicateMutation.mutate()}
+        >
+          <Copy size={14} /> {duplicateMutation.isPending ? "Duplicating…" : "Duplicate as draft"}
+        </button>
       </div>
 
       {statusMutation.isError ? (
@@ -228,6 +245,11 @@ export function ExamDetailPage({ service = examService, scope = "admin", basePat
       {publishMutation.isSuccess ? (
         <div className="alert alert--success" role="status">
           Results are now visible to students.
+        </div>
+      ) : null}
+      {duplicateMutation.isError ? (
+        <div className="alert alert--error" role="alert">
+          {duplicateMutation.error.message}
         </div>
       ) : null}
 

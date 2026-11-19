@@ -4,6 +4,11 @@
  */
 const num = (value) => Number(value ?? 0);
 
+const learningEnrollment = (alias = "e") =>
+  `${alias}.status = 'active'
+   AND (${alias}.valid_from IS NULL OR ${alias}.valid_from <= institute_today())
+   AND (${alias}.valid_until IS NULL OR ${alias}.valid_until >= institute_today())`;
+
 export function createDashboardService(db) {
   return {
     async admin() {
@@ -232,7 +237,7 @@ export function createDashboardService(db) {
          FROM enrollments e
          JOIN courses c ON c.id = e.course_id
          JOIN batches b ON b.id = e.batch_id
-         WHERE e.student_id = $1 AND e.status = 'active'
+         WHERE e.student_id = $1 AND ${learningEnrollment()}
          ORDER BY e.enrolled_at DESC
          LIMIT 1`,
         [studentId]
@@ -241,7 +246,21 @@ export function createDashboardService(db) {
       const courseId = enrollment?.course_id ?? null;
       const batchId = enrollment?.batch_id ?? null;
 
-      const [profile, todaySchedule, announcements, upcomingExams, recentResults, attendance, monthlyAttendance, fees, unread] =
+      const [
+        profile,
+        todaySchedule,
+        announcements,
+        upcomingExams,
+        recentResults,
+        attendance,
+        monthlyAttendance,
+        fees,
+        unread,
+        resumeLesson,
+        nextClassRow,
+        pendingAssignments,
+        pendingAssignmentCount
+      ] =
         await Promise.all([
           db.one(
             `SELECT u.full_name, sp.enrollment_no, sp.admission_date
@@ -321,7 +340,75 @@ export function createDashboardService(db) {
              WHERE sf.student_id = $1 AND sf.status <> 'waived'`,
             [studentId]
           ),
-          db.one("SELECT count(*)::int AS count FROM notifications WHERE user_id = $1 AND read_at IS NULL", [studentId])
+          db.one("SELECT count(*)::int AS count FROM notifications WHERE user_id = $1 AND read_at IS NULL", [studentId]),
+          batchId
+            ? db.one(
+                `SELECT l.id, l.title, l.chapter, s.name AS subject_name, l.duration_minutes,
+                        (l.youtube_video_id IS NOT NULL) AS has_video,
+                        COALESCE(lp.last_position_seconds, 0) AS last_position_seconds, lp.updated_at
+                 FROM lessons l
+                 JOIN subjects s ON s.id = l.subject_id
+                 LEFT JOIN lesson_progress lp ON lp.lesson_id = l.id AND lp.student_id = $2
+                 WHERE l.batch_id = $1 AND l.status = 'published' AND lp.completed_at IS NULL
+                 ORDER BY lp.updated_at DESC NULLS LAST, l.sort_order, l.created_at
+                 LIMIT 1`,
+                [batchId, studentId]
+              )
+            : Promise.resolve(null),
+          batchId
+            ? db.one(
+                `WITH local_now AS (
+                   SELECT now() AT TIME ZONE COALESCE(
+                     NULLIF((SELECT value FROM app_settings WHERE key = 'instituteTimezone'), ''),
+                     'Asia/Kolkata'
+                   ) AS ts
+                 ), candidates AS (
+                   SELECT bs.id, bs.start_time, bs.end_time, bs.room,
+                          s.name AS subject_name, b.name AS batch_name,
+                          local_now.ts::date + (
+                            (bs.day_of_week - EXTRACT(DOW FROM local_now.ts)::int + 7) % 7
+                          ) + CASE
+                            WHEN bs.day_of_week = EXTRACT(DOW FROM local_now.ts)::int
+                                 AND bs.end_time <= local_now.ts::time
+                            THEN 7 ELSE 0
+                          END AS next_date
+                   FROM batch_schedules bs
+                   CROSS JOIN local_now
+                   JOIN batches b ON b.id = bs.batch_id
+                   LEFT JOIN subjects s ON s.id = bs.subject_id
+                   WHERE bs.batch_id = $1
+                 )
+                 SELECT id, subject_name, batch_name, room, start_time, end_time,
+                        to_char(next_date, 'YYYY-MM-DD') AS next_date
+                 FROM candidates
+                 ORDER BY next_date, start_time
+                 LIMIT 1`,
+                [batchId]
+              )
+            : Promise.resolve(null),
+          batchId
+            ? db.many(
+                `SELECT a.id, a.title, a.due_at, a.max_marks, s.name AS subject_name
+                 FROM assignments a
+                 JOIN subjects s ON s.id = a.subject_id
+                 LEFT JOIN assignment_submissions sub
+                   ON sub.assignment_id = a.id AND sub.student_id = $2
+                 WHERE a.batch_id = $1 AND a.status = 'published' AND sub.id IS NULL
+                 ORDER BY a.due_at ASC NULLS LAST, a.created_at DESC
+                 LIMIT 4`,
+                [batchId, studentId]
+              )
+            : Promise.resolve([]),
+          batchId
+            ? db.one(
+                `SELECT count(*)::int AS count
+                 FROM assignments a
+                 LEFT JOIN assignment_submissions sub
+                   ON sub.assignment_id = a.id AND sub.student_id = $2
+                 WHERE a.batch_id = $1 AND a.status = 'published' AND sub.id IS NULL`,
+                [batchId, studentId]
+              )
+            : Promise.resolve({ count: 0 })
         ]);
 
       const attendancePercentage =
@@ -340,6 +427,45 @@ export function createDashboardService(db) {
         announcements,
         upcomingExams,
         recentResults,
+        resumeLesson: resumeLesson
+          ? {
+              id: resumeLesson.id,
+              title: resumeLesson.title,
+              chapter: resumeLesson.chapter,
+              subjectName: resumeLesson.subject_name,
+              durationMinutes: resumeLesson.duration_minutes,
+              hasVideo: Boolean(resumeLesson.has_video),
+              lastPositionSeconds: num(resumeLesson.last_position_seconds),
+              progressPercent:
+                resumeLesson.duration_minutes && resumeLesson.last_position_seconds
+                  ? Math.min(
+                      100,
+                      Math.round(
+                        (num(resumeLesson.last_position_seconds) / (num(resumeLesson.duration_minutes) * 60)) * 100
+                      )
+                    )
+                  : 0
+            }
+          : null,
+        nextClass: nextClassRow
+          ? {
+              id: nextClassRow.id,
+              subjectName: nextClassRow.subject_name,
+              batchName: nextClassRow.batch_name,
+              room: nextClassRow.room,
+              startTime: nextClassRow.start_time,
+              endTime: nextClassRow.end_time,
+              nextDate: nextClassRow.next_date
+            }
+          : null,
+        pendingAssignments: pendingAssignments.map((assignment) => ({
+          id: assignment.id,
+          title: assignment.title,
+          dueAt: assignment.due_at,
+          maxMarks: assignment.max_marks,
+          subjectName: assignment.subject_name
+        })),
+        pendingAssignmentsTotal: num(pendingAssignmentCount?.count),
         attendance: {
           total: num(attendance.total),
           present: num(attendance.present),

@@ -31,8 +31,23 @@ export function StudentExamAttemptPage() {
   const [answers, setAnswers] = useState({});
   const [seconds, setSeconds] = useState(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [saveState, setSaveState] = useState("idle");
+  const [saveError, setSaveError] = useState(null);
+  const [saveRetryable, setSaveRetryable] = useState(false);
+  const [serverEnded, setServerEnded] = useState(false);
   const firstRender = useRef(true);
   const autoSubmitted = useRef(false);
+  const answersRevision = useRef(0);
+  const answersRef = useRef({});
+
+  useEffect(() => {
+    answersRef.current = answers;
+  }, [answers]);
+
+  const updateAnswers = (updater) => {
+    answersRevision.current += 1;
+    setAnswers(updater);
+  };
 
   useEffect(() => {
     if (!attemptQuery.data) return;
@@ -76,27 +91,67 @@ export function StudentExamAttemptPage() {
   }, [attemptQuery.data, expiresAtMs]);
 
   const saveMutation = useMutation({
-    mutationFn: (payload) => studentService.saveAnswers(id, payload)
-  });
-
-  const submitMutation = useMutation({
-    mutationFn: async () => {
-      const payload = buildPayload();
-      if (payload.length > 0) {
-        // Best effort: if the clock has already run out the server rejects the save, but
-        // whatever it did receive must still be submitted rather than left hanging.
-        await studentService.saveAnswers(id, payload).catch(() => {});
-      }
-      return studentService.submitAttempt(id);
+    mutationFn: (payload) => studentService.saveAnswers(id, payload),
+    onMutate: () => {
+      const revision = answersRevision.current;
+      setSaveState("saving");
+      setSaveError(null);
+      return { revision };
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["student", "exams"] });
-      queryClient.invalidateQueries({ queryKey: ["student", "results"] });
+    onSuccess: (_data, _payload, context) => {
+      // A response for an older revision must not claim that newer edits were saved.
+      if (context.revision === answersRevision.current) {
+        setSaveState("saved");
+        return;
+      }
+      setSaveState("saving");
+      const payload = buildPayload(answersRef.current);
+      if (payload.length > 0) setTimeout(() => saveMutation.mutate(payload), 0);
+    },
+    onError: (error) => {
+      if (error.code === "attempt_expired") {
+        // The server deadline is authoritative even if the local countdown disagrees.
+        // Stop retrying, drop the editor and reload the closed attempt.
+        setServerEnded(true);
+        setSaveState("ended");
+        setSaveError(null);
+        setSaveRetryable(false);
+        attemptQuery.refetch();
+        return;
+      }
+      const transient = error.status === 0 || error.status === 429 || error.status >= 500;
+      setSaveState("failed");
+      setSaveError(error.message);
+      setSaveRetryable(transient);
+      // A definitive rejection may mean another tab submitted or the server closed
+      // the attempt; reconcile before showing the editor again.
+      if (!transient) attemptQuery.refetch();
     }
   });
 
-  function buildPayload() {
-    return Object.entries(answers)
+  const submitMutation = useMutation({
+    mutationFn: () =>
+      // The server writes these final answers in the same transaction that claims
+      // submission, so a pending debounce cannot lose the last selection.
+      studentService.submitAttempt(id, { answers: buildPayload() }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["student", "exams"] });
+      queryClient.invalidateQueries({ queryKey: ["student", "results"] });
+    },
+    onError: (error) => {
+      if (error.code === "attempt_expired") {
+        setServerEnded(true);
+        setSaveState("ended");
+        setSaveError(null);
+        attemptQuery.refetch();
+        return;
+      }
+      if (error.status !== 0 && error.status !== 429 && error.status < 500) attemptQuery.refetch();
+    }
+  });
+
+  function buildPayload(source = answers) {
+    return Object.entries(source)
       .map(([questionId, value]) => ({
         questionId,
         selectedOptionId: value.selectedOptionId || undefined,
@@ -107,7 +162,7 @@ export function StudentExamAttemptPage() {
   }
 
   const result = submitMutation.data;
-  const inProgress = attemptQuery.data?.attempt.status === "in_progress" && !result;
+  const inProgress = attemptQuery.data?.attempt.status === "in_progress" && !result && !serverEnded;
 
   useEffect(() => {
     if (!attemptQuery.data || !inProgress) return;
@@ -118,11 +173,24 @@ export function StudentExamAttemptPage() {
     const timeout = setTimeout(() => {
       // Saving after expiry only produces a "time is up" error; the submit takes over.
       if (expiresAtMs && Date.now() >= expiresAtMs) return;
+      if (saveMutation.isPending) return;
       const payload = buildPayload();
       if (payload.length > 0) saveMutation.mutate(payload);
     }, 1200);
     return () => clearTimeout(timeout);
   }, [answers, expiresAtMs]);
+
+  // Only transient failures retry themselves while the attempt is still open. The
+  // status is only ever "saved" after the server has confirmed the write.
+  useEffect(() => {
+    if (saveState !== "failed" || !saveRetryable || !inProgress || saveMutation.isPending) return undefined;
+    const timeout = setTimeout(() => {
+      if (expiresAtMs && Date.now() >= expiresAtMs) return;
+      const payload = buildPayload();
+      if (payload.length > 0) saveMutation.mutate(payload);
+    }, 3000);
+    return () => clearTimeout(timeout);
+  }, [saveState, saveRetryable, inProgress, saveMutation.isPending, answers, expiresAtMs]);
 
   useEffect(() => {
     if (!inProgress || seconds === null || seconds > 0 || autoSubmitted.current) return;
@@ -140,16 +208,26 @@ export function StudentExamAttemptPage() {
   }).length;
 
   if (result) {
+    const scorePublished = result.resultsPublished === true && result.score !== null && result.score !== undefined;
     return (
       <SectionCard title="Submitted" subtitle={exam.title}>
         <div className="stack" style={{ gap: 12 }}>
           <div className="alert alert--success" role="status">
             <CheckCircle2 size={16} aria-hidden="true" />
             <span>
-              Your answers are in. {result.pending ? "Subjective answers are waiting for your teacher's evaluation." : `Score ${result.score} / ${result.totalMarks}.`}
+              Your answers are in.{" "}
+              {scorePublished
+                ? result.pending
+                  ? "Subjective answers are waiting for your teacher's evaluation."
+                  : `Score ${result.score} / ${result.totalMarks}.`
+                : "Results are not published yet."}
             </span>
           </div>
-          <p className="small muted">Results become visible on the Tests page once your teacher publishes them.</p>
+          <p className="small muted">
+            {result.resultsPublished
+              ? "Published results are also available on the Tests page."
+              : "Scores and answers become visible on the Tests page once your teacher publishes them."}
+          </p>
           <div className="row" style={{ gap: 8 }}>
             <Link className="btn btn--primary btn--sm" to="/student/exams">
               Back to tests
@@ -160,13 +238,22 @@ export function StudentExamAttemptPage() {
     );
   }
 
-  if (attempt.status !== "in_progress") {
+  if (serverEnded || attempt.status !== "in_progress") {
+    const closedByExpiry = serverEnded || attempt.status === "expired";
+    const publishedScore =
+      attempt.resultsPublished === true && attempt.score !== null && attempt.score !== undefined;
     return (
       <SectionCard title={exam.title} subtitle={`Attempt ${attempt.attemptNo}`}>
         <EmptyState
           icon={Clock}
-          title="This attempt is closed"
-          description={`Status: ${attempt.status}. Open the Tests page to see your result or start another attempt.`}
+          title={closedByExpiry ? "Time is up" : "This attempt is closed"}
+          description={
+            serverEnded && attempt.status === "in_progress"
+              ? "The server ended this attempt. Its final status is being refreshed."
+              : `Status: ${attempt.status}. ${
+                  publishedScore ? `Score ${attempt.score} / ${exam.totalMarks}.` : "Results are not published yet."
+                }`
+          }
         />
         <div className="row" style={{ justifyContent: "center" }}>
           <Link className="btn btn--ghost btn--sm" to="/student/exams">
@@ -184,6 +271,14 @@ export function StudentExamAttemptPage() {
           <p className="cell-primary">{exam.title}</p>
           <p className="small muted">
             {answeredCount} of {questions.length} answered
+            {saveState !== "idle" ? (
+              <span role="status">
+                {" · "}
+                {saveState === "saving" ? "Saving…" : null}
+                {saveState === "saved" ? "Saved" : null}
+                {saveState === "failed" ? "Not saved" : null}
+              </span>
+            ) : null}
           </p>
         </div>
         <Badge tone={seconds !== null && seconds < 300 ? "danger" : "brand"}>
@@ -198,9 +293,24 @@ export function StudentExamAttemptPage() {
         </div>
       ) : null}
 
-      {saveMutation.isError ? (
+      {saveState === "failed" ? (
         <div className="alert alert--error" role="alert">
-          Answers could not be saved: {saveMutation.error.message}
+          Answers could not be saved: {saveError}.{" "}
+          {saveRetryable ? (
+            <>
+              Retrying while the attempt is open.{" "}
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                disabled={saveMutation.isPending}
+                onClick={() => saveMutation.mutate(buildPayload())}
+              >
+                Retry now
+              </button>
+            </>
+          ) : (
+            "Edit an answer to try again, or submit the attempt."
+          )}
         </div>
       ) : null}
 
@@ -224,7 +334,7 @@ export function StudentExamAttemptPage() {
                 className={value.markedForReview ? "btn btn--primary btn--sm" : "btn btn--ghost btn--sm"}
                 aria-pressed={value.markedForReview}
                 onClick={() =>
-                  setAnswers((current) => ({
+                  updateAnswers((current) => ({
                     ...current,
                     [question.id]: { ...value, markedForReview: !value.markedForReview }
                   }))
@@ -245,7 +355,7 @@ export function StudentExamAttemptPage() {
                         name={`question-${question.id}`}
                         checked={value.selectedOptionId === option.id}
                         onChange={() =>
-                          setAnswers((current) => ({
+                          updateAnswers((current) => ({
                             ...current,
                             [question.id]: { ...value, selectedOptionId: option.id }
                           }))
@@ -262,7 +372,7 @@ export function StudentExamAttemptPage() {
                   placeholder="Write your answer"
                   value={value.answerText}
                   onChange={(event) =>
-                    setAnswers((current) => ({
+                    updateAnswers((current) => ({
                       ...current,
                       [question.id]: { ...value, answerText: event.target.value }
                     }))
@@ -275,7 +385,9 @@ export function StudentExamAttemptPage() {
       })}
 
       <div className="row row--between" style={{ gap: 8 }}>
-        <span className="small muted">{saveMutation.isSuccess ? "Answers saved" : "Autosave is on"}</span>
+        <span className="small muted">
+          {saveState === "saved" ? "Answers saved" : saveState === "failed" ? "Answers not saved" : "Autosave is on"}
+        </span>
         <button
           type="button"
           className="btn btn--primary"

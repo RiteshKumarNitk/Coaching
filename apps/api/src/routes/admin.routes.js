@@ -13,6 +13,8 @@ import {
   announcementUpdateSchema,
   assignEnrollmentSchema,
   assignTeacherSchema,
+  closeEnrollmentSchema,
+  transferEnrollmentSchema,
   batchScheduleSchema,
   batchSubjectSchema,
   batchTeacherSchema,
@@ -124,6 +126,19 @@ export function createAdminRouter({
     validate({ params: idParams, body: assignEnrollmentSchema }),
     asyncHandler(adminController.enrollStudent)
   );
+  router.post(
+    "/students/:id/enrollment/:enrollmentId/close",
+    writeStudents,
+    validate({ params: idAndEnrollment, body: closeEnrollmentSchema }),
+    asyncHandler(adminController.closeEnrollment)
+  );
+  router.post(
+    "/students/:id/enrollment/:enrollmentId/transfer",
+    writeStudents,
+    validate({ params: idAndEnrollment, body: transferEnrollmentSchema }),
+    asyncHandler(adminController.transferEnrollment)
+  );
+  // Kept for compatibility: now withdraws (keeps history) instead of deleting.
   router.delete(
     "/students/:id/enrollment/:enrollmentId",
     writeStudents,
@@ -265,6 +280,12 @@ export function createAdminRouter({
     manageExams,
     validate({ params: idParams, body: examUpdateSchema }),
     asyncHandler(examsController.update)
+  );
+  router.post(
+    "/exams/:id/duplicate",
+    manageExams,
+    validate({ params: idParams }),
+    asyncHandler(examsController.duplicate)
   );
   router.delete("/exams/:id", manageExams, validate({ params: idParams }), asyncHandler(examsController.remove));
   router.post(
