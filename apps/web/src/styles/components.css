@@ -900,6 +900,76 @@ table.data tbody tr.is-clickable:focus-visible {
   outline-offset: -2px;
 }
 
+@media (max-width: 640px) {
+  .table-wrap--stack {
+    overflow: visible;
+    border: 0;
+    background: transparent;
+  }
+
+  .table-wrap--stack table.data,
+  .table-wrap--stack tbody,
+  .table-wrap--stack tr,
+  .table-wrap--stack td {
+    display: block;
+    width: 100%;
+  }
+
+  .table-wrap--stack table.data {
+    min-width: 0;
+  }
+
+  .table-wrap--stack thead {
+    display: none;
+  }
+
+  .table-wrap--stack tr {
+    margin-bottom: 8px;
+    padding: 4px 0;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface);
+  }
+
+  .table-wrap--stack tr:last-child {
+    margin-bottom: 0;
+  }
+
+  .table-wrap--stack td {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 6px 12px;
+    border-bottom: 0;
+    text-align: right;
+  }
+
+  .table-wrap--stack td::before {
+    content: attr(data-label);
+    flex-shrink: 0;
+    color: var(--ink-500);
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .table-wrap--stack td:first-child {
+    padding-top: 9px;
+    font-weight: 600;
+    color: var(--ink-900);
+  }
+
+  .table-wrap--stack td:last-child {
+    padding-bottom: 9px;
+  }
+
+  .table-wrap--stack tr > td[data-label="Note"]:empty {
+    display: none;
+  }
+}
+
 .cell-primary {
   font-weight: 600;
   color: var(--ink-900);

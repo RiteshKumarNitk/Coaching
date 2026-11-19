@@ -1,9 +1,11 @@
 import { Skeleton } from "./Skeleton.jsx";
 
-export function DataTable({ columns, rows, rowKey = "id", loading, empty, onRowClick }) {
+export function DataTable({ columns, rows, rowKey = "id", loading, empty, onRowClick, stacked = false }) {
+  const wrapClass = `table-wrap${stacked ? " table-wrap--stack" : ""}`;
+
   if (loading) {
     return (
-      <div className="table-wrap" role="status" aria-live="polite">
+      <div className={wrapClass} role="status" aria-live="polite">
         <span className="visually-hidden">Loading records</span>
         <table className="data">
           <thead>
@@ -34,7 +36,7 @@ export function DataTable({ columns, rows, rowKey = "id", loading, empty, onRowC
   if (!rows || rows.length === 0) return empty;
 
   return (
-    <div className="table-wrap">
+    <div className={wrapClass}>
       <table className="data">
         <thead>
           <tr>

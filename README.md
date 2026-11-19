@@ -30,6 +30,7 @@ in the UI is a mockup: every number and list is read from PostgreSQL for the sig
 | Profile + password change (revokes other sessions) | ✅ |
 | PWA: manifest, icons, service worker, offline page | ✅ |
 | Student mobile app: install card, Home/Learn/Tests/Fees shortcuts, in-app offline banner | ✅ |
+| Student mobile screens: every route, attendance cards, assignment dialog and test attempt checked at 390px | ✅ |
 | Admin/teacher/student CLI + CSV import/export scripts | ✅ |
 | Examinations: question bank, timed attempts, autosave, evaluation, results publishing (admin + teacher workspaces) | ✅ |
 | Fees: structures, dues, offline payments with receipts, student ledger | ✅ |
@@ -81,7 +82,7 @@ Express API over HTTPS, and only through the HttpOnly session cookie.
 | `pnpm lint` | ESLint across the workspace |
 | `pnpm test` | API integration tests (node:test) |
 | `pnpm smoke:ui` | Browser smoke test (real Chrome/Edge, built SPA, temp database): login, role scoping, admin dashboard. Run `pnpm build` first |
-| `pnpm verify:learning` | Teacher-publishes → student-learns walkthrough on a disposable database, desktop + 390px, with screenshots |
+| `pnpm verify:learning` | Teacher-publishes → student-learns walkthrough on a disposable database, including every student route and a submitted test at 390px, with screenshots |
 | `pnpm db:migrate` | Applies pending SQL migrations |
 | `pnpm db:seed` | Development-only sample institute data |
 | `pnpm check:db` | Connection, migration and row-count report |

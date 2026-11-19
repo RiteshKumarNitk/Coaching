@@ -199,12 +199,30 @@ async function main() {
      RETURNING id`,
     [batch.id, subject.id]
   );
-  await db.query(
+  const exam = await db.one(
     `INSERT INTO exams (batch_id, subject_id, title, exam_type, starts_at, ends_at, duration_minutes,
                         total_marks, pass_marks, max_attempts, status)
-     VALUES ($1, $2, 'Algebra weekly test', 'mcq', now() + interval '1 day', now() + interval '2 days',
-             30, 20, 8, 1, 'published')`,
+     VALUES ($1, $2, 'Algebra weekly test', 'mcq', now() - interval '10 minutes', now() + interval '2 days',
+             30, 20, 8, 1, 'published')
+     RETURNING id`,
     [batch.id, subject.id]
+  );
+  const question = await db.one(
+    `INSERT INTO exam_questions (exam_id, question_type, question_text, explanation, marks, negative_marks, sort_order)
+     VALUES ($1, 'mcq', 'What is the value of 2x + 3 when x = 4?', 'Substitute x = 4: 2(4) + 3 = 11.', 20, 0, 1)
+     RETURNING id`,
+    [exam.id]
+  );
+  const answerOption = await db.one(
+    "INSERT INTO exam_options (question_id, option_text, sort_order) VALUES ($1, '11', 1) RETURNING id",
+    [question.id]
+  );
+  await db.query("INSERT INTO exam_options (question_id, option_text, sort_order) VALUES ($1, '7', 2)", [question.id]);
+  await db.query("INSERT INTO exam_options (question_id, option_text, sort_order) VALUES ($1, '14', 3)", [question.id]);
+  await db.query("INSERT INTO exam_options (question_id, option_text, sort_order) VALUES ($1, '8', 4)", [question.id]);
+  await db.query(
+    "INSERT INTO exam_answer_keys (question_id, correct_option_id, updated_by) VALUES ($1, $2, $3)",
+    [question.id, answerOption.id, teacherId]
   );
   const feeStructure = await db.one(
     `INSERT INTO fee_structures (course_id, name, academic_year, total_amount, installments)
@@ -220,6 +238,11 @@ async function main() {
     `INSERT INTO announcements (title, body, audience, batch_id, published_at)
      VALUES ('Bring your formula sheet', 'We will revise linear equations in the next class.', 'batch', $1, now())`,
     [batch.id]
+  );
+  await db.query(
+    `INSERT INTO attendance (batch_id, student_id, session_date, status, notes, marked_by)
+     VALUES ($1, $2, institute_today() - 1, 'present', 'Revision class', $3)`,
+    [batch.id, studentId, teacherId]
   );
 
   const app = createApp(db);
@@ -544,6 +567,138 @@ async function main() {
     }
     console.log(`PASS  mobile bottom nav clears the last control by ${Math.round(bottomLayout.gap)}px`);
     await shot("42-lesson-mobile");
+
+    /* ------------------------------------ every remaining student page at 390px */
+    const checkStudentPage = async ({ route, needle, name, shotName }) => {
+      await page.send("Page.navigate", { url: `${appUrl}${route}` });
+      await waitText(needle);
+      const metrics = await page.evaluate(`(() => ({
+        width: document.documentElement.scrollWidth,
+        viewport: window.innerWidth
+      }))()`);
+      if (metrics.width > metrics.viewport + 1) {
+        throw new Error(`${name} overflows horizontally: ${metrics.width} > ${metrics.viewport}`);
+      }
+      await shot(shotName);
+      await page.evaluate("window.scrollTo(0, document.body.scrollHeight)");
+      await sleep(200);
+      const layout = await page.evaluate(`(() => {
+        const nav = document.querySelector(".bottom-nav")?.getBoundingClientRect();
+        const controls = [...document.querySelectorAll(".student-content a, .student-content button, .student-content input, .student-content select, .student-content textarea")]
+          .filter((node) => node.offsetParent !== null)
+          .map((node) => node.getBoundingClientRect());
+        const lastBottom = controls.length ? Math.max(...controls.map((rect) => rect.bottom)) : 0;
+        return { navTop: nav?.top ?? 0, lastBottom, gap: (nav?.top ?? 0) - lastBottom };
+      })()`);
+      if (layout.gap < 0) {
+        throw new Error(`${name} leaves the last control ${-layout.gap}px under the bottom navigation`);
+      }
+      if (name === "Attendance") {
+        const table = await page.evaluate(`(() => {
+          const wrap = document.querySelector(".table-wrap");
+          return wrap ? { scrollWidth: wrap.scrollWidth, clientWidth: wrap.clientWidth } : null;
+        })()`);
+        if (table && table.scrollWidth > table.clientWidth + 1) {
+          throw new Error(`Attendance still needs horizontal table scrolling at 390px`);
+        }
+      }
+      console.log(`PASS  ${name} fits 390px and clears the bottom navigation`);
+    };
+
+    await checkStudentPage({
+      route: "/student/assignments",
+      needle: "Practice: linear equations",
+      name: "Assignments",
+      shotName: "46-assignments-mobile"
+    });
+    await checkStudentPage({
+      route: "/student/attendance",
+      needle: "Revision class",
+      name: "Attendance",
+      shotName: "47-attendance-mobile"
+    });
+    await checkStudentPage({
+      route: "/student/exams",
+      needle: "Algebra weekly test",
+      name: "Tests",
+      shotName: "48-exams-mobile"
+    });
+
+    await clickText("Start test");
+    await waitFor("the test attempt route", async () => {
+      const pathname = await page.evaluate("location.pathname");
+      return pathname.startsWith("/student/attempts/") || pathname;
+    });
+    await waitText("What is the value of 2x + 3 when x = 4?");
+    const attemptWidth = await page.evaluate(`(() => ({
+      width: document.documentElement.scrollWidth,
+      viewport: window.innerWidth
+    }))()`);
+    if (attemptWidth.width > attemptWidth.viewport + 1) {
+      throw new Error(`the test attempt overflows horizontally: ${attemptWidth.width} > ${attemptWidth.viewport}`);
+    }
+    await shot("54-exam-attempt-mobile");
+    await page.evaluate(`document.querySelector("input[type=radio]")?.click()`);
+    await sleep(300);
+    await clickText("Submit test");
+    await waitText("You answered 1 of 1 questions");
+    await page.evaluate(`document.querySelector(".modal .modal__foot .btn--primary")?.click()`);
+    await waitText("Your answers are in.", 15000);
+    await waitText("Results are not published yet.", 10000);
+    console.log("PASS  a student can answer and submit a test at 390px");
+    await shot("55-exam-submitted-mobile");
+
+    await checkStudentPage({
+      route: "/student/fees",
+      needle: "Total billed",
+      name: "Fees",
+      shotName: "49-fees-mobile"
+    });
+    await checkStudentPage({
+      route: "/student/announcements",
+      needle: "Bring your formula sheet",
+      name: "Notices",
+      shotName: "50-notices-mobile"
+    });
+    await checkStudentPage({
+      route: "/student/materials",
+      needle: "Linear equations formula sheet",
+      name: "Study material",
+      shotName: "51-materials-mobile"
+    });
+    await checkStudentPage({
+      route: "/student/profile",
+      needle: "Student mobile app",
+      name: "Profile",
+      shotName: "52-profile-mobile"
+    });
+
+    await page.send("Page.navigate", { url: `${appUrl}/student/assignments` });
+    await waitText("Practice: linear equations");
+    await clickText("Open & submit");
+    await waitText("Your answer");
+    await waitText("Submit work");
+    const dialog = await page.evaluate(`(() => {
+      const modal = document.querySelector("[role=dialog]");
+      const footer = modal?.querySelector(".modal__foot");
+      if (!modal) return null;
+      const rect = modal.getBoundingClientRect();
+      return {
+        left: rect.left,
+        right: rect.right,
+        viewport: window.innerWidth,
+        footerVisible: Boolean(footer && footer.getBoundingClientRect().bottom <= window.innerHeight + 1)
+      };
+    })()`);
+    if (!dialog) throw new Error("the assignment dialog did not open");
+    if (dialog.left < 0 || dialog.right > dialog.viewport + 1) {
+      throw new Error("the assignment dialog is wider than the phone viewport");
+    }
+    if (!dialog.footerVisible) throw new Error("the assignment dialog footer is off-screen at 390px");
+    console.log("PASS  the assignment submission dialog fits the phone and keeps its actions visible");
+    await shot("53-assignment-dialog-mobile");
+    await clickText("Close");
+    await waitNoText("Your answer", 10000);
 
     /* ------------------------------------------------------- network error UI */
     await page.send("Network.enable");

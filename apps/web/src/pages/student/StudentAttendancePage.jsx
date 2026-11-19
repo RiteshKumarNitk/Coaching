@@ -89,6 +89,7 @@ export function StudentAttendancePage() {
         }
       >
         <DataTable
+          stacked
           columns={[
             { key: "sessionDate", header: "Date", render: (row) => formatDate(row.sessionDate) },
             { key: "batchName", header: "Batch", render: (row) => row.batchName },
