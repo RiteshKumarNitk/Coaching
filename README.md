@@ -29,6 +29,7 @@ in the UI is a mockup: every number and list is read from PostgreSQL for the sig
 | Student learning: course → subject → lesson, YouTube player, resume position, PDF links, completion | ✅ |
 | Profile + password change (revokes other sessions) | ✅ |
 | PWA: manifest, icons, service worker, offline page | ✅ |
+| Student mobile app: install card, Home/Learn/Tests/Fees shortcuts, in-app offline banner | ✅ |
 | Admin/teacher/student CLI + CSV import/export scripts | ✅ |
 | Examinations: question bank, timed attempts, autosave, evaluation, results publishing (admin + teacher workspaces) | ✅ |
 | Fees: structures, dues, offline payments with receipts, student ledger | ✅ |

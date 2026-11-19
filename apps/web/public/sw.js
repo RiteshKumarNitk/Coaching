@@ -7,7 +7,7 @@
  *  - Navigations are network-first with an app-shell offline fallback.
  *  - Same-origin static assets use stale-while-revalidate for fast loads.
  */
-const VERSION = "v1";
+const VERSION = "v2";
 const SHELL_CACHE = `coaching-shell-${VERSION}`;
 const ASSET_CACHE = `coaching-assets-${VERSION}`;
 
@@ -16,6 +16,7 @@ const SHELL_URLS = [
   "/index.html",
   "/offline.html",
   "/manifest.webmanifest",
+  "/student",
   "/favicon.svg",
   "/icons/icon-192.png",
   "/icons/icon-512.png"

@@ -206,6 +206,12 @@ async function main() {
     });
 
     const page = await connectPage(target.webSocketDebuggerUrl);
+    const shotDir = path.join(repoRoot, "docs", "verification");
+    const shot = async (name) => {
+      const { data } = await page.send("Page.captureScreenshot", { format: "png" });
+      await fs.promises.writeFile(path.join(shotDir, `${name}.png`), Buffer.from(data, "base64"));
+      console.log(`SHOT  docs/verification/${name}.png`);
+    };
 
     const fillLogin = async (email) => {
       await page.evaluate(`(() => {
@@ -235,9 +241,81 @@ async function main() {
     });
     await fillLogin("smoke.student@test.local");
     console.log("PASS  student login lands on /student");
+    await waitFor("the student dashboard heading", async () => {
+      const heading = await page.evaluate('document.querySelector("h1")?.textContent?.trim() ?? ""');
+      return heading.length > 0 || "heading not rendered yet";
+    });
     const studentHeading = await page.evaluate('document.querySelector("h1")?.textContent ?? ""');
-    if (!studentHeading.trim()) throw new Error("The student dashboard rendered without a heading");
     console.log(`PASS  student dashboard rendered ("${studentHeading.trim()}")`);
+
+    // 1b. Student mobile app metadata, install surface and offline banner.
+    const manifest = await page.evaluate('fetch("/manifest.webmanifest").then((response) => response.json())');
+    if (manifest.display !== "standalone") throw new Error("manifest is not standalone");
+    const shortcutUrls = (manifest.shortcuts ?? []).map((shortcut) => shortcut.url);
+    for (const expected of ["/student", "/student/courses", "/student/exams", "/student/fees"]) {
+      if (!shortcutUrls.includes(expected)) throw new Error(`manifest shortcut missing ${expected}`);
+    }
+    console.log("PASS  student app manifest exposes Home, Learn, Tests and Fees shortcuts");
+
+    const worker = await page.evaluate(`(async () => {
+      if (!("serviceWorker" in navigator)) return "unsupported";
+      const registration = await Promise.race([
+        navigator.serviceWorker.ready,
+        new Promise((resolve) => setTimeout(() => resolve(null), 10000))
+      ]);
+      return registration ? "ready" : "timeout";
+    })()`);
+    if (worker !== "ready") throw new Error(`service worker did not become ready: ${worker}`);
+    console.log("PASS  production service worker is active");
+
+    await page.send("Emulation.setDeviceMetricsOverride", {
+      width: 390,
+      height: 844,
+      deviceScaleFactor: 1,
+      mobile: true
+    });
+    await page.send("Page.navigate", { url: `${appUrl}/student/profile` });
+    await waitFor("the student app card", async () => {
+      const body = await page.evaluate("document.body.innerText");
+      return body.includes("Student mobile app") || body.slice(0, 300);
+    });
+    await page.evaluate(`window.dispatchEvent(Object.assign(new Event("beforeinstallprompt"), {
+      prompt: () => Promise.resolve(),
+      userChoice: Promise.resolve({ outcome: "dismissed" })
+    }))`);
+    await waitFor("the install button", async () => {
+      const visible = await page.evaluate(`[...document.querySelectorAll("button")].some(
+        (node) => node.offsetParent !== null && node.textContent.includes("Install student app")
+      )`);
+      return visible;
+    });
+    await page.evaluate(`document.querySelectorAll(".card__title")[1]?.closest(".card")?.scrollIntoView({ block: "center" })`);
+    await sleep(200);
+    await shot("44-student-app-mobile");
+    await page.evaluate(`[...document.querySelectorAll("button")]
+      .find((node) => node.textContent.includes("Install student app"))?.click()`);
+    await waitFor("the install cancellation message", async () => {
+      const body = await page.evaluate("document.body.innerText");
+      return body.includes("Install cancelled") || body.slice(0, 300);
+    });
+    console.log("PASS  student app card shows the install action and its outcome");
+
+    await page.evaluate('window.scrollTo(0, 0); window.dispatchEvent(new Event("offline"))');
+    await waitFor("the offline banner", async () => {
+      const body = await page.evaluate("document.body.innerText");
+      return body.includes("You are offline") || body.slice(0, 300);
+    });
+    await sleep(200);
+    await shot("45-student-app-offline");
+    await page.evaluate('window.dispatchEvent(new Event("online"))');
+    console.log("PASS  student app shows and clears the offline banner");
+
+    await page.send("Emulation.setDeviceMetricsOverride", {
+      width: 1360,
+      height: 1000,
+      deviceScaleFactor: 1,
+      mobile: false
+    });
 
     // 2. Role-scoped routing: a student cannot stay on /admin.
     await page.send("Page.navigate", { url: `${appUrl}/admin` });

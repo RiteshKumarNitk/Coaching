@@ -33,11 +33,31 @@
       "purpose": "maskable"
     }
   ],
+  "prefer_related_applications": false,
   "shortcuts": [
     {
-      "name": "My dashboard",
-      "short_name": "Dashboard",
-      "url": "/student"
+      "name": "Student home",
+      "short_name": "Home",
+      "url": "/student",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "My lessons",
+      "short_name": "Learn",
+      "url": "/student/courses",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "My tests",
+      "short_name": "Tests",
+      "url": "/student/exams",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "My fees",
+      "short_name": "Fees",
+      "url": "/student/fees",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
     }
   ]
 }

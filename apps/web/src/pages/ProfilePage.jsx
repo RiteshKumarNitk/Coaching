@@ -5,17 +5,21 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { AlertCircle, CheckCircle2, KeyRound, Mail, Phone, ShieldCheck, UserRound } from "lucide-react";
 import { changePasswordSchema, ROLE_LABELS } from "@coaching/shared";
 import { authService } from "../services/auth.service.js";
+import { useAuth } from "../hooks/useAuth.js";
 import { useDocumentTitle } from "../hooks/useDocumentTitle.js";
 import { PageHeader } from "../components/PageHeader.jsx";
 import { SectionCard } from "../components/SectionCard.jsx";
 import { Skeleton } from "../components/Skeleton.jsx";
 import { ErrorState } from "../components/ErrorState.jsx";
 import { Badge } from "../components/Badge.jsx";
+import { StudentAppCard } from "../components/StudentAppCard.jsx";
 import { formatDate, initials } from "../utils/format.js";
 
 export function ProfilePage() {
   useDocumentTitle("My profile");
   const queryClient = useQueryClient();
+  const { user } = useAuth();
+  const isStudent = user?.roles?.includes("student");
   const [notice, setNotice] = useState(null);
 
   const profileQuery = useQuery({
@@ -104,6 +108,8 @@ export function ProfilePage() {
               </div>
             )}
           </SectionCard>
+
+          {isStudent ? <StudentAppCard /> : null}
 
           {studentProfile ? (
             <SectionCard title="Enrolment" subtitle="Student record">

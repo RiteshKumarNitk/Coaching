@@ -1,12 +1,14 @@
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { BookOpen, CalendarCheck, ClipboardList, Home, LogOut, UserRound, Wallet } from "lucide-react";
+import { BookOpen, CalendarCheck, ClipboardList, Home, LogOut, UserRound, Wallet, WifiOff } from "lucide-react";
 import { useAuth } from "../hooks/useAuth.js";
+import { useOnlineStatus } from "../hooks/useOnlineStatus.js";
 import { initials } from "../utils/format.js";
 
 export function StudentLayout() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const online = useOnlineStatus();
 
   async function handleSignOut() {
     await logout();
@@ -50,6 +52,13 @@ export function StudentLayout() {
           </div>
         ) : null}
       </header>
+
+      {!online ? (
+        <div className="offline-banner" role="status">
+          <WifiOff size={15} aria-hidden="true" />
+          <span>You are offline. Cached pages remain readable; lessons, tests and fees need a connection.</span>
+        </div>
+      ) : null}
 
       <main className="student-content" id="student-main" key={location.pathname}>
         <Outlet />

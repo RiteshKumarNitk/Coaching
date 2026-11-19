@@ -294,6 +294,23 @@
   border-bottom: 1px solid var(--border);
 }
 
+.offline-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 16px;
+  background: var(--warning-100);
+  color: var(--warning-700);
+  border-bottom: 1px solid rgba(146, 94, 0, 0.16);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.offline-banner svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
 .student-content {
   width: 100%;
   max-width: 780px;
