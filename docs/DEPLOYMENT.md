@@ -90,10 +90,20 @@ is not the default.
    NODE_ENV=production
    PORT=<provided by host>
    APP_ORIGIN=https://your-domain
-   DATABASE_URL=postgresql://…-pooler…?sslmode=require
+   DATABASE_URL=postgresql://…-pooler…
+   DATABASE_SSL=verify-full
    COOKIE_SECURE=true
+   TRUST_PROXY=true
    SESSION_TTL_DAYS=7
    ```
+   `DATABASE_SSL` is resolved by the API, not by `pg`: the adapter strips `sslmode=`
+   from `DATABASE_URL` and sets the TLS mode explicitly, which is why the boot log no
+   longer carries the `pg-connection-string` sslmode warning. `verify-full` is the
+   default for any non-local host and verifies the certificate chain *and* the
+   hostname; `require`, `prefer`, `verify-ca` and `allow` are aliases for it (the same
+   behaviour `pg-connection-string` v2 has today, pinned here so the v3 switch to
+   weaker libpq semantics cannot change it); `no-verify` encrypts without verifying
+   the certificate, and `disable` turns TLS off. See §2a for self-hosted Postgres.
 4. **Migrate** with a one-off job: `pnpm db:migrate`. Do **not** run the dev seed against
    the production branch.
 5. **Remove the demo data** (never run the dev seed against the production branch):
@@ -118,6 +128,23 @@ is not the default.
    confirm `/api/student/dashboard` returns 403 for an admin session.
 9. **HTTPS is mandatory** in production: the session cookie is `Secure`, and service
    workers only register on secure origins.
+
+### 2a. Self-hosted Postgres
+
+The adapter defaults to `verify-full` because a remote database and the application
+usually do not share a network. Two self-hosted shapes are supported:
+
+- **Postgres on the same machine, no TLS.** Set `DATABASE_URL` to `127.0.0.1` (the
+  adapter then defaults to `disable`) or set `DATABASE_SSL=disable` explicitly. Traffic
+  never leaves the host, so TLS adds nothing; keep the port bound to loopback.
+- **Self-hosted Postgres with TLS.** Set `DATABASE_SSL=verify-full` and, if the server
+  uses a private CA, point `NODE_EXTRA_CA_CERTS=/etc/ssl/certs/institute-ca.pem` at the
+  CA bundle in the API's environment. Only fall back to `no-verify` (encrypted, no
+  certificate check — vulnerable to a man-in-the-middle) when you cannot install the CA
+  and cannot use a verified certificate.
+
+An unsupported value fails at startup with the list of valid modes rather than
+silently connecting without TLS.
 
 ## 3. Security checklist for go-live
 

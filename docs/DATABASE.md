@@ -231,3 +231,9 @@ exported files outside the repository — they contain student data.
 - Neon: use the `-pooler` connection string in `DATABASE_URL` for serverless hosts.
 - Free plan supports up to 10,000 pooled connections per compute, but application-level
   pooling to 10 prevents a burst of API instances from exhausting Postgres slots.
+- TLS is resolved by `packages/db`, not by `pg`: `sslmode=` is stripped from
+  `DATABASE_URL` and the `ssl` option is set from `DATABASE_SSL`. Non-local hosts
+  default to `verify-full`; a loopback host defaults to `disable`. Allowed values:
+  `verify-full`, `verify-ca`, `require`, `prefer`, `allow` (all aliases for
+  `verify-full`), `no-verify` (encrypted, unverified certificate) and `disable`.
+  `NODE_EXTRA_CA_CERTS` supplies a private CA.

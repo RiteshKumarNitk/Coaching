@@ -67,6 +67,10 @@ teacher, student) and one generated password. If `SEED_ADMIN_PASSWORD` is set in
 3. Run `pnpm db:migrate && pnpm create-admin -- --email you@example.com --name "Your Name"`.
 4. `pnpm dev`.
 
+The API dials Postgres with TLS on by default (`DATABASE_SSL=verify-full` for any
+non-local host, `disable` for `127.0.0.1`/`localhost`); set `DATABASE_SSL` explicitly
+for a self-hosted server. See `docs/DEPLOYMENT.md` §2a.
+
 Never commit `.env`. The browser never receives a database URL: it talks only to the
 Express API over HTTPS, and only through the HttpOnly session cookie.
 
